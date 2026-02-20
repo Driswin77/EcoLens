@@ -353,7 +353,7 @@ export default function Dashboard({ userName }) {
                 <Box display="flex" justifyContent="center" alignItems="center" height="220px" width="100%">
                     <Stack alignItems="center" spacing={2}>
                         <CircularProgress sx={{ color: "#3b82f6" }} />
-                        <Typography variant="caption" color="#94a3b8">Consulting Legal AI for {searchQuery}...</Typography>
+                        <Typography variant="caption" color="#94a3b8">Fetching Laws for {searchQuery}...</Typography>
                     </Stack>
                 </Box>
             ) : (

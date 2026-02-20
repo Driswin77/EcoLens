@@ -11,6 +11,7 @@ import {
   Card,
   LinearProgress,
 } from "@mui/material";
+import { Scale, ScaleIcon } from "lucide-react";
 
 // Icons
 import DashboardIcon from "@mui/icons-material/Dashboard";
@@ -32,7 +33,7 @@ export default function Sidebar({ currentView, onNavigate, user, onLogout }) {
     { text: "Visual Scanner", icon: <CameraAltIcon />, view: "VisualScanner" },
     { text: "Eco Map & Impact", icon: <MapIcon />, view: "EcoMap" },
     { text: "Digital Glovebox", icon: <FolderIcon />, view: "Glovebox" },
-    { text: "Report Issue", icon: <ReportIcon />, view: "Report" },
+    { text: "Legal Advisor", icon: <ScaleIcon />, view: "LegalAdvisor" },
   ];
 
   return (

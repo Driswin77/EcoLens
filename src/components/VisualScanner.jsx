@@ -31,9 +31,9 @@ import SendIcon from '@mui/icons-material/Send';
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import MapIcon from '@mui/icons-material/Map';
-import HistoryIcon from '@mui/icons-material/History'; // New Icon
-import DescriptionIcon from '@mui/icons-material/Description'; // New Icon
-import AccessTimeIcon from '@mui/icons-material/AccessTime'; // New Icon
+import HistoryIcon from '@mui/icons-material/History'; 
+import DescriptionIcon from '@mui/icons-material/Description'; 
+import AccessTimeIcon from '@mui/icons-material/AccessTime'; 
 
 // Smooth transition for popups
 const Transition = React.forwardRef(function Transition(props, ref) {
@@ -195,7 +195,6 @@ export default function VisualScanner({ userEmail }) {
     }
 
     // 3. Fallback Generation (If API returns nothing useful or blocked results)
-    // Instead of giving a random result, we construct a correct-sounding name manually.
     if (isTraffic) return `${place} Traffic Police Station`;
     if (isEnvironmental) return `${place} Municipality Office`;
     if (isFire) return `${place} Fire Station`;
@@ -234,7 +233,7 @@ export default function VisualScanner({ userEmail }) {
     reader.readAsDataURL(file);
   };
 
-  /* ================= ANALYZE LOGIC ================= */
+  /* ================= ANALYZE LOGIC (AI ENFORCER) ================= */
   const analyze = async () => {
     try {
       setAnalyzing(true);
@@ -253,8 +252,7 @@ export default function VisualScanner({ userEmail }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base64: finalImage, 
-          // UPDATED PROMPT: DYNAMIC LAW RETRIEVAL
-          // We removed the hardcoded examples and instructed the AI to act as a legal expert
+          // RESTORED PROMPT: DIRECT AUTHORITY ROUTING (NO INDUSTRY WARNINGS)
           prompt: `You are an AI Enforcement Officer for India. Analyze this image deeply.
           
           STEP 1: DETECT
@@ -269,12 +267,12 @@ export default function VisualScanner({ userEmail }) {
           Return STRICT JSON (No markdown): 
           { 
             "violation": boolean, 
-            "category": "Traffic Violation" or "Environmental Violation" or "Civic Issue", 
+            "category": "Traffic Violation" | "Environmental Violation" | "Civic Issue", 
             "title": "Precise Violation Name", 
             "description": "Short observation of the scene", 
             "law": "Specific Act & Section Number", 
             "fineAmount": "₹ Amount (e.g. ₹1000)",
-            "severity": "High" or "Medium" or "Low"
+            "severity": "High" | "Medium" | "Low"
           }`,
           context: { administrativeArea: place }
         }),
@@ -293,7 +291,7 @@ export default function VisualScanner({ userEmail }) {
     }
   };
 
-  /* ================= REPORT LOGIC ================= */
+  /* ================= REPORT LOGIC (STANDARD DIRECT ROUTING) ================= */
   const handleInstantReport = async () => {
     if (!userEmail) {
         alert("Session Expired. Please login again.");
@@ -302,12 +300,15 @@ export default function VisualScanner({ userEmail }) {
     setReportStatus('sending');
 
     try {
-        // Find REAL Authority (Police vs Municipality)
-        const realAuthorityName = await findRealAuthority(result.category);
-
         const now = new Date();
         const dateString = now.toLocaleDateString('en-IN'); 
         const timeString = now.toLocaleTimeString('en-IN'); 
+
+        // --- DIRECT REPORTING TO AUTHORITY (NO INDUSTRY CHECKS) ---
+        // We calculate the correct authority based on TomTom spatial data
+        // and route the violation directly to their dashboard.
+        
+        const realAuthorityName = await findRealAuthority(result.category);
 
         const reportPayload = {
             userEmail: userEmail,
@@ -333,6 +334,8 @@ export default function VisualScanner({ userEmail }) {
             category: result.category
         });
         setReportStatus('success');
+        
+        // --- End of Direct Reporting Logic ---
 
     } catch (err) {
         console.error(err);
@@ -359,7 +362,7 @@ export default function VisualScanner({ userEmail }) {
   return (
     <Box sx={{ width: "100%", minHeight: "85vh", bgcolor: "#121212", pb: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
       
-      {/* --- NEW: PREVIOUS REPORTS BUTTON (Top Right) --- */}
+      {/* --- HISTORY BUTTON (Top Right) --- */}
       <Box sx={{ position: 'absolute', top: 20, right: 20 }}>
           <Button
             variant="outlined"
@@ -379,7 +382,7 @@ export default function VisualScanner({ userEmail }) {
 
       {/* --- DASHBOARD HEADER --- */}
       <Box sx={{ width: "100%", maxWidth: "600px", px: 3, textAlign: "center" }}>
-        <Typography variant="h4" fontWeight="800" mb={1} sx={{ 
+        <Typography variant="h5" fontWeight="800" mb={1} sx={{ 
             background: "linear-gradient(45deg, #FF512F 30%, #DD2476 90%)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent"
@@ -394,9 +397,9 @@ export default function VisualScanner({ userEmail }) {
           startIcon={<CameraAltIcon />}
           onClick={startCamera}
           variant="contained"
-          size="large"
+          size="medium"
           sx={{
-            width: "100%", py: 2.5, mb: 2, borderRadius: 3,
+            width: "80%", py: 2.5, mb: 2, borderRadius: 3,
             bgcolor: "#ef4444", color: "#fff", fontWeight: 700, fontSize: "1.1rem",
             boxShadow: "0 0 25px rgba(239, 68, 68, 0.4)",
             "&:hover": { bgcolor: "#dc2626" }
@@ -412,7 +415,7 @@ export default function VisualScanner({ userEmail }) {
           onClick={() => fileInputRef.current.click()}
           variant="outlined"
           sx={{
-            width: "100%", py: 2, borderRadius: 3,
+            width: "80%", py: 2, borderRadius: 3,
             borderColor: "#555", color: "#ccc",
             "&:hover": { borderColor: "#fff", color: "#fff", bgcolor: "rgba(255,255,255,0.05)" }
           }}
@@ -504,7 +507,7 @@ export default function VisualScanner({ userEmail }) {
                     
                     {/* Severity Chip */}
                     {result?.violation && (
-                        <Box mb={3}>
+                        <Box mb={3} display="flex" gap={1}>
                             <Chip 
                                 label={`SEVERITY: ${result.severity?.toUpperCase() || "PENDING"}`} 
                                 sx={{ 
@@ -552,17 +555,7 @@ export default function VisualScanner({ userEmail }) {
                             <Typography variant="caption" color="#f87171" fontWeight="bold" display="block" mb={0.5}>
                                 APPLICABLE LAW
                             </Typography>
-                            <Typography 
-                                variant="caption" 
-                                sx={{ 
-                                    color: "#e2e8f0", 
-                                    fontFamily: "monospace", 
-                                    lineHeight: 1.4,
-                                    wordBreak: "break-word",
-                                    whiteSpace: "pre-wrap", 
-                                    display: "block"
-                                }}
-                            >
+                            <Typography variant="caption" sx={{ color: "#e2e8f0", fontFamily: "monospace", lineHeight: 1.4, whiteSpace: "pre-wrap", display: "block" }}>
                                 {result?.law || "Pending Legal Review"}
                             </Typography>
                         </Box>
@@ -650,7 +643,7 @@ export default function VisualScanner({ userEmail }) {
           </DialogContent>
       </Dialog>
 
-      {/* --- 4. HISTORY DIALOG (NEW) --- */}
+      {/* --- 4. HISTORY DIALOG --- */}
       <Dialog 
         open={openHistory} 
         onClose={() => setOpenHistory(false)}
@@ -661,8 +654,8 @@ export default function VisualScanner({ userEmail }) {
       >
         <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: '1px solid #374151' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
-             <HistoryIcon sx={{ color: "#f59e0b" }} />
-             <Typography variant="h6" fontWeight="bold">Submission History</Typography>
+              <HistoryIcon sx={{ color: "#f59e0b" }} />
+              <Typography variant="h6" fontWeight="bold">Submission History</Typography>
           </Stack>
           <IconButton onClick={() => setOpenHistory(false)} sx={{ color: "#94a3b8" }}><CloseIcon /></IconButton>
         </DialogTitle>

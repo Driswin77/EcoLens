@@ -7,8 +7,8 @@ import Dashboard from "./components/Dashboard";
 import VisualScanner from "./components/VisualScanner";
 import Ecomap from "./components/Ecomap";
 import Glovebox from "./components/Glovebox";
-import ReportPage from "./Pages/ReportPage";
-import LoginPage from "./components/LoginPage"; 
+import LoginPage from "./components/LoginPage";
+import LegalAdvisor from "./components/LegalAdvisor";
 
 function App() {
   // State to track the currently logged-in user
@@ -93,13 +93,8 @@ function App() {
             <Glovebox userEmail={currentUser.email} />
         )}
 
-        {/* 5. Report Issue View */}
-        {currentView === "Report" && (
-          <Box sx={{ height: "100%", overflowY: "auto" }}>
-            {/* UPDATED: Passing userEmail */}
-            <ReportPage userEmail={currentUser.email} />
-          </Box>
-        )}
+        {/* 5. Legal Advisor View */}
+        {currentView === "LegalAdvisor" && <LegalAdvisor/>}
       </Box>
     </Box>
   );

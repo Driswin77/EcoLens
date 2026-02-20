@@ -210,6 +210,7 @@ export default function Glovebox({ userEmail }) {
                   <Grid item xs={12} md={4} key={doc.id || Math.random()}>
                     <Card sx={{ 
                         height: "240px", 
+                    
                         borderRadius: 3, 
                         boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.05)", 
                         position: "relative",

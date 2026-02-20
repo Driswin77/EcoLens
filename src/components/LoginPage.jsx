@@ -31,7 +31,8 @@ const LoginPage = ({ onLogin }) => {
     const payload = isSignUp ? { name, email, password } : { email, password };
 
     try {
-      const res = await axios.post(`http://localhost:5000${endpoint}`, payload);
+      const API_URL = `http://${window.location.hostname}:5000`;
+const res = await axios.post(`${API_URL}${endpoint}`, payload);
       if (res.data.success) {
         // Call the parent function with the user data
         onLogin(res.data.user); 

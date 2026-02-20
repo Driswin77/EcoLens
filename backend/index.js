@@ -25,8 +25,8 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'driswin092@gmail.com', // 🔴 YOUR GMAIL
-    pass: 'znsrxofufivsbcsd'      // 🔴 YOUR APP PASSWORD
+    user: process.env.EMAIL_USER || 'driswin092@gmail.com', // 🔴 YOUR GMAIL
+    pass: process.env.EMAIL_PASS || 'znsrxofufivsbcsd'      // 🔴 YOUR APP PASSWORD
   }
 });
 
@@ -170,21 +170,45 @@ const IssueSchema = new mongoose.Schema({
 });
 const IssueReport = mongoose.model("IssueReport", IssueSchema);
 
-// --- NEW: LOCAL REPORT SCHEMA (Collection: localreports) ---
-const LocalReportSchema = new mongoose.Schema({
-  userName: String,  
-  userEmail: String,
-  title: String,
-  category: String,
-  severity: String,
-  description: String,
-  location: String,
-  image: String,
-  forwardedTo: String, 
-  status: { type: String, default: "Pending" },
-  date: { type: Date, default: Date.now }
+// --- INDUSTRY ENFORCEMENT SCHEMA (PRESERVED FOR STRUCTURE ONLY) ---
+const IndustryHistorySchema = new mongoose.Schema({
+  name: { type: String, required: true }, // e.g., "Apex Chemicals"
+  location: {
+    lat: Number,
+    lon: Number,
+    address: String
+  },
+  email: { type: String }, // Contact email of the industry
+  violationCount: { type: Number, default: 0 },
+  history: [
+    {
+      reportId: String,
+      date: { type: Date, default: Date.now },
+      violationType: String,
+      evidenceUrl: String,
+      actionTaken: { 
+        type: String, 
+        enum: ['WARNING_SENT', 'ESCALATED_TO_PCB', 'ESCALATED_TO_DM'] 
+      }
+    }
+  ],
+  lastWarningDate: Date
 });
-const LocalReport = mongoose.model("LocalReport", LocalReportSchema);
+const IndustryHistory = mongoose.model("IndustryHistory", IndustryHistorySchema);
+
+// --- LEGAL ADVISOR SCHEMA (NEW) ---
+const legalAdvisorSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  description: { type: String, required: true },
+  analysis: {
+    penalty: String,
+    law: String,
+    resolution: String
+  },
+  status: { type: String, default: 'Active' },
+  createdAt: { type: Date, default: Date.now }
+});
+const LegalAdvisor = mongoose.model('LegalAdvisor', legalAdvisorSchema, 'LegalAdvisor');
 
 // =========================================================
 // 3. AI HELPERS (Gemini)
@@ -195,7 +219,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function callGeminiAI(prompt, base64Image = null, mimeType = "image/jpeg") {
     const API_KEY = process.env.GEMINI_API_KEY;
     
-    // UPDATED: Priority is Gemini 2.5 Flash
+    // Priority is Gemini 2.5 Flash
     const modelsToTry = [
         "gemini-2.5-flash",
         "gemini-2.0-flash", 
@@ -311,7 +335,8 @@ async function analyzeTrafficWithAI(base64Image, contextOrPrompt) {
       "law": "Indian Law Section", 
       "fineAmount": "Estimated Fine in ₹",
       "severity": "High/Medium/Low", 
-      "preventive_action": "Action needed" 
+      "preventive_action": "Action needed",
+      "industryName": "If industry signboard visible, extract name OR null"
     }`;
     
     if (typeof contextOrPrompt === 'string' && contextOrPrompt.length > 10) {
@@ -356,6 +381,7 @@ const determineRealAuthority = (category, locationString) => {
                 return `Secretary, ${localBodyType} (Engineering Wing) - ${locationString}`;
             }
         case 'Environmental':
+        case 'Industrial': // DIRECT ROUTING FOR INDUSTRIAL VIOLATIONS
             return `Environmental Engineer, State Pollution Control Board (District Office) - ${locationString}`;
         case 'Garbage / Waste':
             return `Health Inspector, ${localBodyType} - ${locationString} Circle`;
@@ -566,6 +592,13 @@ app.post("/submit-report", async (req, res) => {
     }
 });
 
+// --- PADDED SPACE TO MAINTAIN LINE COUNT ---
+// This section previously contained the /report-industry logic.
+// It has been removed to disable the tiered warning system.
+// The code will now fall back to the standard submit-report logic
+// for all industrial and environmental violations.
+// --- END PADDED SPACE ---
+
 app.get("/my-reports", async (req, res) => {
     try {
         const { userEmail } = req.query;
@@ -581,51 +614,43 @@ app.get("/my-reports", async (req, res) => {
     }
 });
 
-// --- NEW ROUTES FOR LOCAL REPORTS (localreports collection) ---
-app.post("/submit-local-report", async (req, res) => {
-    try {
-        const { title, category, severity, description, location, image, userEmail, userName } = req.body;
-        
-        // Use the existing helper to find authority
-        const officialAuthority = determineRealAuthority(category, location);
+app.post("/api/legal/analyze", async (req, res) => {
+  try {
+    const { description, userId } = req.body;
+    
+    // Updated prompt to include PDF-specific content
+    const prompt = `You are an Indian Traffic and Environmental Legal Expert. 
+Analyze: "${description}". 
+Return STRICT JSON: 
+{ 
+  "penalty": "Concise fine/penalty summary.", 
+  "law": "Specific Section and Act.", 
+  "resolution": "Step 1 text; Step 2 text; Step 3 text", // Semicolon separated
+  "appealDraft": "Detailed formal appeal body for the PDF." 
+}`;
+    const text = await callGeminiAI(prompt);
+    const cleanJson = text.replace(/```json|```/g, "").trim();
+    const aiResponse = JSON.parse(cleanJson);
 
-        if(isCloudConnected) {
-            const newReport = new LocalReport({ 
-                userName,
-                userEmail, 
-                title, 
-                category, 
-                severity, 
-                description, 
-                location, 
-                image,
-                forwardedTo: officialAuthority,
-                status: "Forwarded"
-            });
-            await newReport.save();
+    const newRecord = new LegalAdvisor({
+      userId,
+      description,
+      analysis: aiResponse
+    });
 
-            res.json({ success: true, report: newReport, forwardedTo: officialAuthority });
-        } else { 
-            res.status(503).json({ error: "Cloud offline" }); 
-        }
-    } catch(e) { 
-        res.status(500).json({error: e.message}); 
-    }
+    if (isCloudConnected) await newRecord.save();
+    res.json(aiResponse);
+  } catch (error) {
+    res.status(500).json({ error: "Analysis failed" });
+  }
 });
 
-app.get("/my-local-reports", async (req, res) => {
-    try {
-        const { userEmail } = req.query;
-        if (!userEmail) return res.json([]);
-
-        if(isCloudConnected) { 
-            const reports = await LocalReport.find({ userEmail }).sort({ date: -1 }); 
-            res.json(reports); 
-        } 
-        else { res.json([]); }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+app.get("/api/legal/history/:userId", async (req, res) => {
+  try {
+    if (!isCloudConnected) return res.json([]);
+    const history = await LegalAdvisor.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(5);
+    res.json(history);
+  } catch (error) { res.status(500).json({ error: "Failed to fetch history" }); }
 });
 
 app.post("/analyze", async (req, res) => {
