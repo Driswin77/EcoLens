@@ -110,7 +110,7 @@ export default function VisualScanner({ userEmail }) {
     );
   }, []);
 
-  /* ================= 2. STRICT AUTHORITY ROUTING (UPDATED) ================= */
+ /* ================= 2. STRICT AUTHORITY ROUTING (UPDATED) ================= */
   const findRealAuthority = async (category) => {
     const TOMTOM_KEY = "u0ilQFRkdoZ9gPvf1G6ri97BH5ZslXb3"; 
 
@@ -184,7 +184,7 @@ export default function VisualScanner({ userEmail }) {
                     }
 
                     if (isValid) {
-                        console.log("✅ Found Verified Authority:", name);
+                        console.log("Found Verified Authority:", name);
                         return name; // Return the first valid match
                     }
                 }

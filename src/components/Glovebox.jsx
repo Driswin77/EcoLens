@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Box,
+  Box,Paper,
   Typography,
   Grid,
   Card,
@@ -25,6 +25,7 @@ import VisibilityIcon from "@mui/icons-material/Visibility"; // Added for better
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close"; // Added for Modal
 import axios from "axios";
+
 
 // 1. Accept userEmail as a prop (CHANGED FROM userPhone)
 export default function Glovebox({ userEmail }) {
@@ -145,6 +146,7 @@ export default function Glovebox({ userEmail }) {
       
       {/* HEADER SECTION */}
       <Box mb={4}>
+      <Paper elevation={3} sx={{ p: 3, borderRadius: 3, bgcolor: "#e0f2fe" }}>
         <Typography variant="h4" fontWeight="bold" color="#111827">Digital Glovebox</Typography>
         <Stack direction="row" alignItems="center" spacing={2} mt={1}>
             <Typography color="#6b7280" variant="body1">
@@ -156,6 +158,7 @@ export default function Glovebox({ userEmail }) {
                 sx={{ bgcolor: "#dbeafe", color: "#1e40af", fontWeight: "bold", fontSize: "0.7rem", borderRadius: 1 }} 
             />
         </Stack>
+        </Paper>
       </Box>
 
       {/* MAIN GRID */}

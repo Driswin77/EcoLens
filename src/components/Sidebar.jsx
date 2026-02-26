@@ -115,18 +115,6 @@ export default function Sidebar({ currentView, onNavigate, user, onLogout }) {
       {/* Spacer to push content to bottom */}
       <Box sx={{ flexGrow: 1 }} />
 
-      {/* BOTTOM CONTROLS */}
-      <Box sx={{ px: 3, pb: 2 }}>
-        <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
-          <Typography variant="body2" sx={{opacity: 0.8}}>Eco-Pilot</Typography>
-          <Switch notchecked color="success" size="small" />
-        </Box>
-
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="body2" sx={{opacity: 0.8}}>Push Alerts</Typography>
-          <Switch notchecked color="success" size="small" />
-        </Box>
-      </Box>
 
       {/* NEW: USER PROFILE & LOGOUT SECTION */}
       {user && (

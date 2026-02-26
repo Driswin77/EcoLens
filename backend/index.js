@@ -126,7 +126,7 @@ let isCloudConnected = false;
 if (MONGO_URI) {
     mongoose.connect(MONGO_URI)
         .then(() => {
-            console.log("✅ CONNECTED TO MONGODB CLOUD");
+            console.log("CONNECTED TO DB....");
             isCloudConnected = true;
         })
         .catch(err => console.error("⚠️ Cloud Connection Error:", err.message));
@@ -196,20 +196,22 @@ const IndustryHistorySchema = new mongoose.Schema({
 });
 const IndustryHistory = mongoose.model("IndustryHistory", IndustryHistorySchema);
 
-// --- LEGAL ADVISOR SCHEMA (NEW) ---
+// --- LEGAL ADVISOR SCHEMA (UPDATED) ---
 const legalAdvisorSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   description: { type: String, required: true },
+  language: { type: String, default: 'English' }, // New field to track the selected language
   analysis: {
     penalty: String,
     law: String,
-    resolution: String
+    resolution: String,
+    appealDraft: String // Added to match your latest backend prompt
   },
   status: { type: String, default: 'Active' },
   createdAt: { type: Date, default: Date.now }
 });
-const LegalAdvisor = mongoose.model('LegalAdvisor', legalAdvisorSchema, 'LegalAdvisor');
 
+const LegalAdvisor = mongoose.model('LegalAdvisor', legalAdvisorSchema, 'LegalAdvisor');
 // =========================================================
 // 3. AI HELPERS (Gemini)
 // =========================================================
@@ -616,41 +618,65 @@ app.get("/my-reports", async (req, res) => {
 
 app.post("/api/legal/analyze", async (req, res) => {
   try {
-    const { description, userId } = req.body;
-    
-    // Updated prompt to include PDF-specific content
+    const { description, userId, language } = req.body;
+    const finalUserId = userId?.trim() ? userId : "Guest";
+
+    const languageMap = {
+      'en-IN': 'English',
+      'hi-IN': 'Hindi',
+      'ml-IN': 'Malayalam',
+      'ta-IN': 'Tamil',
+      'kn-IN': 'Kannada'
+    };
+    const targetLang = languageMap[language] || 'English';
+
     const prompt = `You are an Indian Traffic and Environmental Legal Expert. 
-Analyze: "${description}". 
-Return STRICT JSON: 
-{ 
-  "penalty": "Concise fine/penalty summary.", 
-  "law": "Specific Section and Act.", 
-  "resolution": "Step 1 text; Step 2 text; Step 3 text", // Semicolon separated
-  "appealDraft": "Detailed formal appeal body for the PDF." 
-}`;
+    Analyze: "${description}". 
+    CRITICAL: Provide the entire response strictly in formal ${targetLang}.
+    Return STRICT JSON: 
+    { 
+      "penalty": "Fine/penalty summary.", 
+      "law": "Specific Section and Act.", 
+      "resolution": "Step 1; Step 2; Step 3", 
+      "appealDraft": "Detailed formal appeal body for a legal document." 
+    }`;
+
     const text = await callGeminiAI(prompt);
-    const cleanJson = text.replace(/```json|```/g, "").trim();
-    const aiResponse = JSON.parse(cleanJson);
+    
+    // Robust JSON extraction
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("Invalid AI response format");
+    const aiResponse = JSON.parse(jsonMatch[0]);
 
     const newRecord = new LegalAdvisor({
-      userId,
+      userId: finalUserId,
       description,
+      language: targetLang,
       analysis: aiResponse
     });
 
-    if (isCloudConnected) await newRecord.save();
+    if (isCloudConnected) {
+        await newRecord.save();
+        console.log(`Record saved for ${finalUserId}`);
+    }
+
     res.json(aiResponse);
+
   } catch (error) {
-    res.status(500).json({ error: "Analysis failed" });
+    console.error("Analysis Error:", error);
+    res.status(500).json({ error: "Legal analysis failed. Please try again." });
   }
 });
 
 app.get("/api/legal/history/:userId", async (req, res) => {
   try {
     if (!isCloudConnected) return res.json([]);
+    // Fetch history for the specific user
     const history = await LegalAdvisor.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(5);
     res.json(history);
-  } catch (error) { res.status(500).json({ error: "Failed to fetch history" }); }
+  } catch (error) { 
+    res.status(500).json({ error: "Failed to fetch history" }); 
+  }
 });
 
 app.post("/analyze", async (req, res) => {
