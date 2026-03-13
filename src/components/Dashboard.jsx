@@ -38,6 +38,10 @@ export default function Dashboard({ userName }) {
   const [trafficRules, setTrafficRules] = useState([]);
   const [ecoRules, setEcoRules] = useState([]);
 
+  //Temerature State
+  const [temperature, setTemperature] = useState(null);
+  const [weatherCode, setWeatherCode] = useState(null);
+
   // =========================================================
   // 0. DYNAMIC GREETING LOGIC
   // =========================================================
@@ -61,6 +65,7 @@ export default function Dashboard({ userName }) {
                 setCoords({ latitude, longitude });
                 await fetchAddress(latitude, longitude);
                 fetchAqi(latitude, longitude); 
+                fetchWeather(latitude, longitude);
             },
             (err) => {
                 console.warn("Geo Error:", err);
@@ -235,6 +240,32 @@ export default function Dashboard({ userName }) {
       return "#ef4444"; 
   };
 
+  const getWeatherIcon = (code) => {
+  if (code === 0) return "☀️";
+  if (code <= 2) return "🌤";
+  if (code === 3) return "☁️";
+  if (code >= 51 && code <= 67) return "🌧";
+  if (code >= 71) return "❄️";
+  return "🌤";
+};
+
+  const fetchWeather = async (lat, lon) => {
+  try {
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`
+    );
+
+    const data = await res.json();
+
+    if (data.current_weather) {
+      setTemperature(data.current_weather.temperature);
+      setWeatherCode(data.current_weather.weathercode);
+    }
+  } catch (err) {
+    console.error("Weather fetch error", err);
+  }
+};
+
   useEffect(() => {
     detectLocation(); 
   }, []);
@@ -247,41 +278,120 @@ export default function Dashboard({ userName }) {
   };
 
   return (
-    <Box sx={{ width: "100%", pb: 4, px: 2, bgcolor: "#f8fafc" }}>
+    <Box sx={{ width: "100%", pb: 4, mt: -2, px: 4, background: "linear-gradient(135deg, #145A40, #1B4332)" }}>
       {/* ================= HEADER ================= */}
       <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems="center" spacing={2} sx={{ py: 3 }}>
-        <Box>
-          <Typography variant="h5" fontWeight="800" sx={{ color: "#0f172a", letterSpacing: "-0.5px" }}>
-            {getGreeting()}, {userName || "Citizen"}
-          </Typography>
-          <Stack direction="row" spacing={1} alignItems="center" mt={0.5}>
-            <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: "#22c55e", boxShadow: "0 0 8px #22c55e" }} />
-            <Typography variant="body2" fontWeight="500" color="#64748b">
-                Live Regional Intelligence Active
-            </Typography>
-          </Stack>
-        </Box>
+       <Box sx={{ width: "100%", maxWidth: 600, pb: 0 }}>
+  <Paper
+  elevation={0}
+  sx={{
+    mb: 3,
+    width: "100%",
+    height: 100,
+    borderRadius: "20px",
+    background: "rgba(255, 255, 255, 0.08)",
+    backdropFilter: "blur(10px)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    color: "#E8F5E9",
+    boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
+    p: 2
+  }}
+>
+    <Typography
+      variant="h5"
+      fontWeight="800"
+      sx={{ color: "#FFFFFF", letterSpacing: "-0.5px" }}
+    >
+      {getGreeting()}, {userName || "Citizen"}
+    </Typography>
 
-        {/* SEARCH BAR & LOCATION BUTTON */}
-        <Paper
-          elevation={0}
-          sx={{
-            display: "flex", alignItems: "center", px: 2, py: 1,
-            borderRadius: "16px", bgcolor: "#fff", border: "1px solid #e2e8f0",
-            width: { xs: "100%", md: 450 }, boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)"
-          }}
-        >
-          <LocationOnIcon sx={{ color: "#3b82f6", mr: 1, fontSize: 22 }} />
+    <Stack direction="row" spacing={1} alignItems="center" mt={0.5}>
+      <Box
+        sx={{
+          width: 10,
+          height: 10,
+          borderRadius: "50%",
+          bgcolor: "#2ECC71",              // eco green
+          boxShadow: "0 0 10px #2ECC71"
+        }}
+      />
+
+      <Typography
+        variant="body2"
+        fontWeight="500"
+        sx={{ color: "#FFFFFF" }}          // softer dark text
+      >
+        Live Regional Intelligence Active
+      </Typography>
+
+     <Box
+  sx={{
+    textAlign: "center",
+    position: "absolute",
+    top: 10,
+    right: 20,
+    bgcolor: "rgba(255,255,255,0.08)",
+    borderRadius: "12px",
+    px: 2,
+    py: 1,
+    border: "1px solid rgba(255,255,255,0.1)",
+    boxShadow: "0 6px 16px rgba(0,0,0,0.25)"
+  }}
+>
+  <Typography variant="h5">
+    {getWeatherIcon(weatherCode)} {temperature ? `${temperature}°C` : "--"}
+  </Typography>
+
+  <Typography variant="caption" sx={{ color: "#B7E4C7" }}>
+    Local Weather
+  </Typography>
+</Box>
+  
+
+    </Stack>
+  </Paper>
+</Box>
+
+      <Paper
+  elevation={0}
+  sx={{
+    position: "absolute",
+    top: 10,
+    right:20,
+
+    display: "flex",
+    alignItems: "center",
+    px: 2,
+    py: 1,
+    borderRadius: "16px",
+    width: { xs: "100%", md: 250 },
+
+    background: "rgba(36, 70, 62, 0.85)",
+    backdropFilter: "blur(10px)",
+    border: "1px solid rgba(255,255,255,0.08)",
+
+    color: "#E0F2F1",
+    boxShadow: "0 6px 16px rgba(0,0,0,0.25)",
+
+    transition: "all 0.3s ease",
+
+    "&:hover": {
+      background: "rgba(36, 70, 62, 1)",
+      boxShadow: "0 8px 20px rgba(0,0,0,0.35)"
+    }
+  }}
+>
+          <LocationOnIcon sx={{ color: "#2ECC71", mr: 1, fontSize: 22 }} />
           <InputBase
-            sx={{ flex: 1, fontSize: 14, fontWeight: "500" }}
+            sx={{ flex: 1,color: "#E0F2F1", fontSize: 14, fontWeight: "500" }}
             placeholder="Search specific area (e.g., Parappuram)..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleSearch}
           />
           {loading && <CircularProgress size={18} sx={{ mr: 1 }} />}
-          <Divider orientation="vertical" flexItem sx={{ mx: 1, height: 24 }} />
-          
+          <Divider orientation="vertical" flexItem sx={{ mx: 1, height: 30 , borderColor: "rgba(255,255,255,0.25)" }} />
+
           <IconButton 
             size="small" 
             onClick={detectLocation} 
@@ -293,14 +403,15 @@ export default function Dashboard({ userName }) {
         </Paper>
       </Stack>
 
+
       <Grid container spacing={3}>
         {/* === LEFT COLUMN: THE HIGHLIGHTED ZONE CARD === */}
         <Grid item xs={12} md={8}>
           <Card
             elevation={0}
             sx={{
-              p: 3, borderRadius: "24px",
-              background: "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
+              p: 3, borderRadius: "24px",mt: -4,
+              background: "linear-gradient(135deg, #1B4332, #2D6A4F)",
               color: "white", minHeight: 450, display: "flex", flexDirection: "column",
               boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1)", position: "relative", overflow: "hidden"
             }}
@@ -327,21 +438,34 @@ export default function Dashboard({ userName }) {
               </Box>
 
               {/* === AQI BOX === */}
-              <Box sx={{ textAlign: "right", p: 2, bgcolor: "rgba(255,255,255,0.05)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)" }}>
-                <Box display="flex" alignItems="center" justifyContent="flex-end" gap={0.5} mb={0.5}>
-                    <AirIcon sx={{ fontSize: 16, color: "#94a3b8" }} />
-                    <Typography variant="caption" sx={{ color: "#94a3b8" }}>LOCAL AQI</Typography>
-                </Box>
-                <Typography variant="h4" fontWeight="800" sx={{ color: getAqiColor(aqi) }}>
-                    {aqi !== null ? aqi : "--"}
-                </Typography>
-                <Typography variant="caption" sx={{ color: getAqiColor(aqi) }}>
-                    {aqi <= 50 ? "Good" : aqi <= 100 ? "Moderate" : "Poor"}
-                </Typography>
-              </Box>
-            </Stack>
+<Box
+  sx={{
+    textAlign: "right",
+    p: 2,
+    bgcolor: "#1B4332",   // better eco card color
+    borderRadius: "16px",
+    border: "1px solid rgba(255,255,255,0.08)",
+    boxShadow: "0 8px 20px rgba(0,0,0,0.15)"  // adds depth
+  }}
+>
+  <Box display="flex" alignItems="center" justifyContent="flex-end" gap={0.5} mb={0.5}>
+    <AirIcon sx={{ fontSize: 16, color: "#B7E4C7" }} />
+    <Typography variant="caption" sx={{ color: "#B7E4C7" }}>
+      LOCAL AQI
+    </Typography>
+  </Box>
 
-            <Box sx={{ mt: 3, mb: 3 }}>
+  <Typography variant="h4" fontWeight="800" sx={{ color: getAqiColor(aqi) }}>
+    {aqi !== null ? aqi : "--"}
+  </Typography>
+
+  <Typography variant="caption" sx={{ color: getAqiColor(aqi) }}>
+    {aqi <= 50 ? "Good" : aqi <= 100 ? "Moderate" : "Poor"}
+  </Typography>
+</Box>
+</Stack>
+
+            <Box sx={{ mt: -1, mb: 3 }}>
                 <Typography variant="body2" sx={{ color: "#cbd5e1", lineHeight: 1.6, maxWidth: "600px" }}>
                   Active compliance monitoring is in effect. The protocols below are <strong>dynamically fetched</strong> based on 
                   local municipal bylaws and regional transport acts for <strong>{searchQuery || "this region"}</strong>.
@@ -368,7 +492,7 @@ export default function Dashboard({ userName }) {
                         }}>
                           {/* FIXED HEADER */}
                           <Box sx={{ 
-                             bgcolor: "#1e293b", 
+                             bgcolor: "#1B4332", 
                              p: 1.5, 
                              borderBottom: "1px solid rgba(255,255,255,0.1)", 
                              display: "flex", alignItems: "center", gap: 1,
@@ -404,7 +528,7 @@ export default function Dashboard({ userName }) {
                         }}>
                           {/* FIXED HEADER */}
                           <Box sx={{ 
-                             bgcolor: "#1e293b", 
+                             bgcolor: "#1B4332", 
                              p: 1.5, 
                              borderBottom: "1px solid rgba(255,255,255,0.1)", 
                              display: "flex", alignItems: "center", gap: 1,

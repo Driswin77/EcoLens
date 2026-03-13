@@ -324,21 +324,25 @@ async function scanDocumentWithAI(base64Image, mimeType) {
   }
 }
 
-// D. VISUAL SCANNER
+// D. VISUAL SCANNER (UPGRADED FOR MULTIPLE VIOLATIONS)
 async function analyzeTrafficWithAI(base64Image, contextOrPrompt) {
     let finalPrompt = `
     Analyze traffic/environmental image. 
-    Strictly Output JSON: 
+    Strictly Output JSON (No markdown): 
     { 
-      "violation": boolean, 
-      "category": "Traffic" or "Environmental", 
-      "title": "Short Title", 
-      "description": "Brief description", 
-      "law": "Indian Law Section", 
-      "fineAmount": "Estimated Fine in ₹",
-      "severity": "High/Medium/Low", 
-      "preventive_action": "Action needed",
-      "industryName": "If industry signboard visible, extract name OR null"
+      "violationsFound": boolean,
+      "totalEstimatedFine": "Total amount in ₹",
+      "overallSeverity": "High/Medium/Low",
+      "violations": [
+          {
+            "category": "Traffic" or "Environmental", 
+            "title": "Short Title", 
+            "description": "Brief description", 
+            "law": "Indian Law Section", 
+            "fineAmount": "Estimated Fine in ₹",
+            "severity": "High/Medium/Low"
+          }
+      ]
     }`;
     
     if (typeof contextOrPrompt === 'string' && contextOrPrompt.length > 10) {
@@ -352,10 +356,20 @@ async function analyzeTrafficWithAI(base64Image, contextOrPrompt) {
         let cleanJson = text.replace(/```json|```/g, "").trim();
         const firstBrace = cleanJson.indexOf("{");
         const lastBrace = cleanJson.lastIndexOf("}");
-        if (firstBrace !== -1 && lastBrace !== -1) cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
+        
+        if (firstBrace !== -1 && lastBrace !== -1) {
+            cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
+        }
+        
         return JSON.parse(cleanJson);
     } catch (e) {
-        return { violation: false, title: "Error", description: e.message };
+        console.error("AI Analysis Error:", e);
+        return { 
+            violationsFound: false, 
+            totalEstimatedFine: "₹0",
+            overallSeverity: "Low",
+            violations: [{ category: "Error", title: "Analysis Failed", description: e.message, law: "N/A", fineAmount: "₹0", severity: "Low" }] 
+        };
     }
 }
 

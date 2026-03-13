@@ -64,7 +64,7 @@ function App() {
           flexGrow: 1,
           height: "100%",
           // Dynamic Background: Black for Scanner, Light Gray for others
-          bgcolor: currentView === "VisualScanner" ? "#000" : "#f3f4f6",
+          bgcolor: currentView === "VisualScanner" ? "#121212" : "#145A40",
           overflow: "hidden",
           position: "relative",
         }}
@@ -73,7 +73,7 @@ function App() {
 
         {/* 1. Dashboard View */}
         {currentView === "Dashboard" && (
-          <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
+          <Box sx={{ p: 4, height: "100%", overflowY: "auto",background: "linear-gradient(135deg, #145A40, #1B4332)" }}>
             <Dashboard userName={currentUser.name} />
           </Box>
         )}

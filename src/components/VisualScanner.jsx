@@ -110,96 +110,75 @@ export default function VisualScanner({ userEmail }) {
     );
   }, []);
 
- /* ================= 2. STRICT AUTHORITY ROUTING (UPDATED) ================= */
-  const findRealAuthority = async (category) => {
+  /* ================= 2. STRICT NEAREST AUTHORITY ROUTING (UPGRADED) ================= */
+  const findRealAuthority = async (category, coordinates, placeName) => {
     const TOMTOM_KEY = "u0ilQFRkdoZ9gPvf1G6ri97BH5ZslXb3"; 
 
-    // 1. Determine Category Type
     const catLower = category?.toLowerCase() || "";
-    const isTraffic = catLower.includes("traffic") || catLower.includes("vehicle") || catLower.includes("helmet") || catLower.includes("license");
-    const isEnvironmental = catLower.includes("waste") || catLower.includes("garbage") || catLower.includes("burn") || catLower.includes("dump") || catLower.includes("environmental");
-    const isFire = catLower.includes("fire") || catLower.includes("smoke");
+    const isTraffic = catLower.includes("traffic") || catLower.includes("vehicle") || catLower.includes("helmet");
+    const isEnvironmental = catLower.includes("waste") || catLower.includes("garbage") || catLower.includes("burn") || catLower.includes("environmental");
 
-    // 2. Define Search Queries based on category
     let searchQueries = [];
     if (isTraffic) {
-        searchQueries = [`Traffic Police Station ${place}`, `Police Station ${place}`, `RTO ${place}`];
+        searchQueries = [`Traffic Police Station`, `Police Station`, `RTO`];
     } else if (isEnvironmental) {
-        searchQueries = [`Municipality Office ${place}`, `Panchayat Office ${place}`, `Health Centre ${place}`];
-    } else if (isFire) {
-        searchQueries = [`Fire Station ${place}`];
+        searchQueries = [`Municipality Office`, `Panchayat Office`, `Pollution Control Board`];
     } else {
-        searchQueries = [`Police Station ${place}`];
+        searchQueries = [`Police Station`];
     }
 
+    // Radius Expansion: Search outward in waves
+    const searchRadii = [5000, 10000, 20000]; 
+
     try {
-        // Run the Search Waterfall
-        for (const query of searchQueries) {
-            console.log(`🔍 Searching: ${query}`);
-            
-            const url = `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${TOMTOM_KEY}&lat=${coords.lat}&lon=${coords.lon}&radius=5000&limit=5`; 
-            
-            const res = await fetch(url);
-            const data = await res.json();
+        for (const radius of searchRadii) {
+            for (const query of searchQueries) {
+                console.log(`🔍 Searching for ${query} within ${radius / 1000}km...`);
+                
+                // Ensure coordinates exist before calling
+                if (!coordinates.lat || !coordinates.lon) continue;
 
-            if (data.results && data.results.length > 0) {
-                // FILTER: Remove bad results
-                for (let item of data.results) {
-                    const name = item.poi.name;
-                    const nameLower = name.toLowerCase();
-                    
-                    // --- STRICT FILTERING RULES ---
-                    
-                    // A. BAD WORDS (Blocklist) - Immediately reject these
-                    if (
-                        nameLower.includes("educational") || 
-                        nameLower.includes("school") || 
-                        nameLower.includes("college") || 
-                        nameLower.includes("academy") || 
-                        nameLower.includes("bank") || 
-                        nameLower.includes("atm") || 
-                        nameLower.includes("post office") || 
-                        nameLower.includes("hotel") || 
-                        nameLower.includes("lodge") || 
-                        nameLower.includes("residence") || 
-                        nameLower.includes("quarters") ||
-                        nameLower.includes("shop") ||
-                        nameLower.includes("store") ||
-                        nameLower.includes("canteen") ||
-                        nameLower.includes("mess")
-                    ) {
-                        continue; // Skip this result
-                    }
+                const url = `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${TOMTOM_KEY}&lat=${coordinates.lat}&lon=${coordinates.lon}&radius=${radius}&limit=10&idxSet=POI`; 
+                
+                const res = await fetch(url);
+                const data = await res.json();
 
-                    // B. GOOD WORDS (Allowlist) - Result MUST contain one of these
-                    let isValid = false;
-                    if (isTraffic) {
-                        if (nameLower.includes("police") || nameLower.includes("station") || nameLower.includes("rto") || nameLower.includes("enforcement")) isValid = true;
-                    } else if (isEnvironmental) {
-                        if (nameLower.includes("municipality") || nameLower.includes("panchayat") || nameLower.includes("corporation") || nameLower.includes("council") || nameLower.includes("health") || nameLower.includes("police")) isValid = true;
-                    } else if (isFire) {
-                          if (nameLower.includes("fire")) isValid = true;
-                    } else {
-                          if (nameLower.includes("police") || nameLower.includes("station")) isValid = true;
-                    }
+                if (data.results && data.results.length > 0) {
+                    // Distance Sorting: Ensure we pick the absolute closest one
+                    const sortedResults = data.results.sort((a, b) => a.dist - b.dist);
 
-                    if (isValid) {
-                        console.log("Found Verified Authority:", name);
-                        return name; // Return the first valid match
+                    for (let item of sortedResults) {
+                        const name = item.poi.name;
+                        const nameLower = name.toLowerCase();
+                        
+                        // The Blocklist
+                        if (nameLower.match(/school|college|bank|atm|hotel|hospital|clinic|shop|store|educational|academy|lodge|residence|quarters|canteen|mess/)) {
+                            continue; 
+                        }
+
+                        // The Allowlist
+                        let isValid = false;
+                        if (isTraffic && nameLower.match(/police|rto|traffic|station|enforcement/)) isValid = true;
+                        if (isEnvironmental && nameLower.match(/municipality|panchayat|corporation|board|council|health|police/)) isValid = true;
+                        if (!isTraffic && !isEnvironmental && nameLower.match(/police|station/)) isValid = true;
+
+                        if (isValid) {
+                            console.log(`✅ Found Nearest Authority: ${name} (${Math.round(item.dist)}m away)`);
+                            return name; 
+                        }
                     }
                 }
             }
         }
     } catch (e) {
-        console.error("TomTom Error:", e);
+        console.error("Geospatial Routing Error:", e);
     }
 
-    // 3. Fallback Generation (If API returns nothing useful or blocked results)
-    if (isTraffic) return `${place} Traffic Police Station`;
-    if (isEnvironmental) return `${place} Municipality Office`;
-    if (isFire) return `${place} Fire Station`;
-    
-    return `${place} Police Station`;
+    // Escalation Fallback (No fake offices!)
+    console.warn(`Local authority not found near ${placeName}. Escalating report.`);
+    if (isTraffic) return "District Traffic Police Headquarters";
+    if (isEnvironmental) return "State Environmental Protection Board";
+    return "Central Dispatch Queue";
   };
 
   /* ================= CAMERA LOGIC ================= */
@@ -233,7 +212,7 @@ export default function VisualScanner({ userEmail }) {
     reader.readAsDataURL(file);
   };
 
-  /* ================= ANALYZE LOGIC (AI ENFORCER) ================= */
+  /* ================= ANALYZE LOGIC (AI ENFORCER FOR MULTIPLE VIOLATIONS) ================= */
   const analyze = async () => {
     try {
       setAnalyzing(true);
@@ -252,27 +231,32 @@ export default function VisualScanner({ userEmail }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base64: finalImage, 
-          // RESTORED PROMPT: DIRECT AUTHORITY ROUTING (NO INDUSTRY WARNINGS)
           prompt: `You are an AI Enforcement Officer for India. Analyze this image deeply.
           
-          STEP 1: DETECT
-          Check for ANY violation (Traffic, Environmental, Garbage, Burning, Encroachment).
+          STEP 1: DETECT ALL INFRACTIONS
+          Scan the entire image and identify EVERY single violation present (Traffic, Environmental, Garbage, Burning, Encroachment, etc.). There may be multiple violations in one scene (e.g., Triple riding AND no helmets AND illegal parking).
           
-          STEP 2: IDENTIFY LAW & FINE (DYNAMIC)
-          - Do NOT guess. Retrieve the EXACT Indian Act/Section applicable to this specific image.
-          - Example: If triple riding, find "Section 128/194C MV Act". If burning plastic, find "NGT Act / Section 15 EPA".
-          - Estimate the fine amount in Indian Rupees (₹) based on current 2024/2025 standards.
+          STEP 2: IDENTIFY LAW & FINE FOR EACH (DYNAMIC)
+          - Do NOT guess. Retrieve the EXACT Indian Act/Section applicable to EACH specific violation.
+          - Example: Triple riding -> "Section 128/194C MV Act". No helmet -> "Section 129/194D MV Act". Burning plastic -> "NGT Act / Section 15 EPA".
+          - Estimate the fine amount in Indian Rupees (₹) for each based on current 2024/2025 standards.
           
           STEP 3: FORMAT OUTPUT
-          Return STRICT JSON (No markdown): 
+          Return STRICT JSON (No markdown). If no violations are found, set 'violationsFound' to false and leave the array empty.
           { 
-            "violation": boolean, 
-            "category": "Traffic Violation" | "Environmental Violation" | "Civic Issue", 
-            "title": "Precise Violation Name", 
-            "description": "Short observation of the scene", 
-            "law": "Specific Act & Section Number", 
-            "fineAmount": "₹ Amount (e.g. ₹1000)",
-            "severity": "High" | "Medium" | "Low"
+            "violationsFound": boolean,
+            "totalEstimatedFine": "₹ Total Amount (sum of all fines)",
+            "overallSeverity": "High" | "Medium" | "Low",
+            "violations": [
+              {
+                "category": "Traffic Violation" | "Environmental Violation" | "Civic Issue", 
+                "title": "Precise Violation Name", 
+                "description": "Short observation of the scene for this specific violation", 
+                "law": "Specific Act & Section Number", 
+                "fineAmount": "₹ Amount (e.g. ₹1000)",
+                "severity": "High" | "Medium" | "Low"
+              }
+            ]
           }`,
           context: { administrativeArea: place }
         }),
@@ -297,6 +281,13 @@ export default function VisualScanner({ userEmail }) {
         alert("Session Expired. Please login again.");
         return;
     }
+    
+    // Safety check: coordinates must be available for radius routing
+    if (!coords.lat || !coords.lon) {
+        alert("Precise location is still loading. Please wait a second and try again.");
+        return;
+    }
+
     setReportStatus('sending');
 
     try {
@@ -304,18 +295,23 @@ export default function VisualScanner({ userEmail }) {
         const dateString = now.toLocaleDateString('en-IN'); 
         const timeString = now.toLocaleTimeString('en-IN'); 
 
-        // --- DIRECT REPORTING TO AUTHORITY (NO INDUSTRY CHECKS) ---
-        // We calculate the correct authority based on TomTom spatial data
-        // and route the violation directly to their dashboard.
-        
-        const realAuthorityName = await findRealAuthority(result.category);
+        // Extract the main category from the first violation for routing purposes
+        const mainCategory = result.violations && result.violations.length > 0 
+            ? result.violations[0].category 
+            : "General";
+
+        // PASS COORDS AND PLACE TO THE NEW FUNCTION
+        const realAuthorityName = await findRealAuthority(mainCategory, coords, place);
+
+        // Compile all descriptions into one string for the database
+        const compiledDescription = result.violations?.map(v => `${v.title}: ${v.description} (Law: ${v.law})`).join('\n\n') || "No distinct description.";
 
         const reportPayload = {
             userEmail: userEmail,
-            title: result.title || "Detected Violation",
-            category: result.category || "General", 
-            severity: result.severity || "Medium", 
-            description: `${result.description}. Law: ${result.law}.`,
+            title: result.violationsFound ? `${result.violations.length} Violations Detected` : "Detected Violation",
+            category: mainCategory, 
+            severity: result.overallSeverity || "Medium", 
+            description: compiledDescription,
             location: place, 
             image: imgSrc, 
             dateOfOffense: dateString, 
@@ -331,11 +327,9 @@ export default function VisualScanner({ userEmail }) {
             id: res.data.report._id || "CASE-8842",
             date: dateString,
             time: timeString,
-            category: result.category
+            category: mainCategory
         });
         setReportStatus('success');
-        
-        // --- End of Direct Reporting Logic ---
 
     } catch (err) {
         console.error(err);
@@ -469,7 +463,7 @@ export default function VisualScanner({ userEmail }) {
         </DialogContent>
       </Dialog>
 
-      {/* --- 2. RESULT POPUP --- */}
+      {/* --- 2. RESULT POPUP (UPGRADED FOR MULTIPLE VIOLATIONS) --- */}
       <Dialog 
         open={!!result} 
         onClose={() => setResult(null)} 
@@ -479,51 +473,65 @@ export default function VisualScanner({ userEmail }) {
         PaperProps={{ sx: { bgcolor: "#0f172a", color: "#fff", borderRadius: 3, border: "1px solid #374151" } }}
       >
         <Box sx={{ position: 'absolute', right: 12, top: 12 }}>
-            <IconButton onClick={() => setResult(null)} sx={{ color: "#94a3b8" }}><CloseIcon /></IconButton>
+            <IconButton onClick={() => setResult(null)} sx={{ color: "#94a3b8", zIndex: 10 }}><CloseIcon /></IconButton>
         </Box>
 
         <DialogContent sx={{ p: 0 }}>
             <Grid container>
                 <Grid item xs={12} md={7} sx={{ p: 3, borderRight: { md: "1px solid #374151" } }}>
                     <Stack direction="row" alignItems="center" spacing={2} mb={2}>
-                        {result?.violation ? 
+                        {result?.violationsFound ? 
                             <Box sx={{ p: 1, bgcolor: "rgba(239,68,68,0.2)", borderRadius: "50%" }}><GppBadIcon color="error" sx={{ fontSize: 32 }} /></Box> : 
                             <Box sx={{ p: 1, bgcolor: "rgba(34,197,94,0.2)", borderRadius: "50%" }}><CheckCircleIcon color="success" sx={{ fontSize: 32 }} /></Box>
                         }
                         <Box>
                             <Typography variant="overline" color="#94a3b8" fontWeight="bold" letterSpacing={1.2}>STATUS</Typography>
-                            <Typography variant="h6" fontWeight="900" color={result?.violation ? "#ef4444" : "#22c55e"}>
-                                {result?.violation ? "VIOLATION DETECTED" : "COMPLIANT"}
+                            <Typography variant="h6" fontWeight="900" color={result?.violationsFound ? "#ef4444" : "#22c55e"}>
+                                {result?.violationsFound ? `${result.violations?.length} VIOLATION(S) DETECTED` : "COMPLIANT"}
                             </Typography>
                         </Box>
                     </Stack>
 
                     <Divider sx={{ my: 2, bgcolor: "#374151" }} />
 
-                    <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ fontSize: "1.1rem" }}>{result?.title}</Typography>
-                    <Typography variant="body2" sx={{ color: "#cbd5e1", mb: 3, lineHeight: 1.5, fontSize: "0.9rem" }}>
-                        {result?.description}
-                    </Typography>
-                    
-                    {/* Severity Chip */}
-                    {result?.violation && (
-                        <Box mb={3} display="flex" gap={1}>
-                            <Chip 
-                                label={`SEVERITY: ${result.severity?.toUpperCase() || "PENDING"}`} 
-                                sx={{ 
-                                    bgcolor: result?.severity?.toLowerCase() === 'high' ? "#b91c1c" : result?.severity?.toLowerCase() === 'medium' ? "#ca8a04" : "#15803d", 
-                                    color: "#fff", fontWeight: "bold" 
-                                }} 
-                            />
-                        </Box>
-                    )}
+                    {/* MAPPED VIOLATIONS LIST */}
+                    <Box sx={{ maxHeight: "350px", overflowY: "auto", pr: 1, mb: 3, "&::-webkit-scrollbar": { width: "6px" }, "&::-webkit-scrollbar-thumb": { backgroundColor: "#475569", borderRadius: "10px" } }}>
+                        {result?.violations?.map((violation, index) => (
+                            <Box key={index} sx={{ mb: 2, p: 2, bgcolor: "rgba(255,255,255,0.03)", borderRadius: 2, border: "1px solid #374151" }}>
+                                <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={1}>
+                                    <Typography variant="h6" fontWeight="bold" sx={{ fontSize: "1.1rem" }}>{violation.title}</Typography>
+                                    <Chip 
+                                        label={violation.severity?.toUpperCase() || "PENDING"} 
+                                        size="small"
+                                        sx={{ 
+                                            bgcolor: violation.severity?.toLowerCase() === 'high' ? "#b91c1c" : violation.severity?.toLowerCase() === 'medium' ? "#ca8a04" : "#15803d", 
+                                            color: "#fff", fontWeight: "bold", fontSize: "0.7rem"
+                                        }} 
+                                    />
+                                </Stack>
+                                <Typography variant="body2" sx={{ color: "#cbd5e1", mb: 2, lineHeight: 1.5, fontSize: "0.9rem" }}>
+                                    {violation.description}
+                                </Typography>
+                                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                                    <Box sx={{ bgcolor: "rgba(239, 68, 68, 0.1)", px: 1.5, py: 0.5, borderRadius: 1, border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                                        <Typography variant="caption" color="#fca5a5" display="block" fontWeight="bold">LAW / SECTION</Typography>
+                                        <Typography variant="body2" color="#f87171" fontWeight="bold" fontFamily="monospace">{violation.law}</Typography>
+                                    </Box>
+                                    <Box sx={{ bgcolor: "rgba(245, 158, 11, 0.1)", px: 1.5, py: 0.5, borderRadius: 1, border: "1px solid rgba(245, 158, 11, 0.2)" }}>
+                                        <Typography variant="caption" color="#fcd34d" display="block" fontWeight="bold">FINE AMOUNT</Typography>
+                                        <Typography variant="body2" color="#fbbf24" fontWeight="bold">{violation.fineAmount}</Typography>
+                                    </Box>
+                                </Box>
+                            </Box>
+                        ))}
+                    </Box>
 
-                    {result?.violation && (
+                    {result?.violationsFound && (
                          <Button
                             fullWidth
                             variant="contained"
                             color="error"
-                            size="medium"
+                            size="small"
                             endIcon={reportStatus === 'sending' ? null : <SendIcon />}
                             onClick={handleInstantReport}
                             disabled={reportStatus === 'sending'}
@@ -532,7 +540,7 @@ export default function VisualScanner({ userEmail }) {
                                 bgcolor: "#dc2626", "&:hover": { bgcolor: "#b91c1c" }
                             }}
                         >
-                            {reportStatus === 'sending' ? "ROUTING TO AUTHORITY..." : "REPORT TO AUTHORITY"}
+                            {reportStatus === 'sending' ? "ROUTING TO AUTHORITY..." : "REPORT ALL TO AUTHORITY"}
                         </Button>
                     )}
                 </Grid>
@@ -553,19 +561,19 @@ export default function VisualScanner({ userEmail }) {
 
                         <Box sx={{ p: 1.5, bgcolor: "rgba(15, 23, 42, 0.6)", borderRadius: 2, border: "1px dashed #475569" }}>
                             <Typography variant="caption" color="#f87171" fontWeight="bold" display="block" mb={0.5}>
-                                APPLICABLE LAW
+                                APPLICABLE LAWS
                             </Typography>
                             <Typography variant="caption" sx={{ color: "#e2e8f0", fontFamily: "monospace", lineHeight: 1.4, whiteSpace: "pre-wrap", display: "block" }}>
-                                {result?.law || "Pending Legal Review"}
+                                {result?.violationsFound ? "Multiple Statutes Cited (See Details)" : "Pending Legal Review"}
                             </Typography>
                         </Box>
 
                         <Box>
                             <Typography variant="caption" color="#94a3b8" fontWeight="bold" display="block" mb={0.5}>
-                                EST. PENALTY
+                                TOTAL CUMULATIVE PENALTY
                             </Typography>
-                            <Typography variant="h5" fontWeight="800" color="#ef4444">
-                                {result?.fineAmount || "₹ --"}
+                            <Typography variant="h4" fontWeight="800" color="#ef4444">
+                                {result?.totalEstimatedFine || "₹ --"}
                             </Typography>
                         </Box>
                     </Stack>
