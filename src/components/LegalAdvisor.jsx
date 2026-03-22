@@ -1,25 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Scale, FileText, Send, X, Mic, MicOff, Languages } from 'lucide-react';
-import { 
-  Box, Typography, Button, TextField, Paper, Grid, Divider, 
+import { Scale, FileText, Send, X, Mic, MicOff, Languages, Paperclip } from 'lucide-react';
+import {
+  Box, Typography, Button, TextField, Paper, Grid, Divider,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, IconButton,
-  MenuItem, Select, FormControl, InputLabel
+  MenuItem, Select, FormControl, InputLabel, Chip
 } from '@mui/material';
 import jsPDF from 'jspdf';
-// IMPORT the fonts from the separate file
-import { MALAYALAM_FONT, HINDI_FONT , KANNADA_FONT } from './fontData';
+import { MALAYALAM_FONT, HINDI_FONT, KANNADA_FONT } from './fontData';
 
 const LegalAdvisor = () => {
   const [caseDescription, setCaseDescription] = useState('');
   const [analysis, setAnalysis] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [open, setOpen] = useState(false); 
+  const [open, setOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState('en-IN'); 
-  
-  // Use a Ref to keep track of the recognition instance across renders
+  const [selectedLanguage, setSelectedLanguage] = useState('en-IN');
+  const [selectedFile, setSelectedFile] = useState(null); // File object
   const recognitionRef = useRef(null);
-  const [currentUserName, setCurrentUserName] = useState("Guest"); // Default to Guest to avoid empty string errors
+  const [currentUserName, setCurrentUserName] = useState("Guest");
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem("user"));
@@ -28,7 +26,7 @@ const LegalAdvisor = () => {
     }
   }, []);
 
-  // IMPROVED Voice Recognition Logic to handle silence and dictionary gaps
+  // --- Voice Recognition (unchanged) ---
   const toggleListening = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -41,140 +39,140 @@ const LegalAdvisor = () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
-      return; 
+      return;
     }
 
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
-    
-    // Configuration for higher sensitivity
     recognition.lang = selectedLanguage;
-    recognition.continuous = true; 
-    recognition.interimResults = true; 
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => {
-        setIsListening(true);
-        console.log("Speech recognition started");
-    };
-    
+    recognition.onstart = () => setIsListening(true);
     recognition.onresult = (event) => {
       let currentTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        // We capture both final and interim to ensure no words are "dropped"
         if (event.results[i].isFinal) {
           currentTranscript += event.results[i][0].transcript;
         }
       }
-      
       if (currentTranscript) {
-        // Debounce-like update to prevent cursor jumping
         setCaseDescription((prev) => {
-            const trimmedPrev = prev.trim();
-            return trimmedPrev ? `${trimmedPrev} ${currentTranscript.trim()}` : currentTranscript.trim();
+          const trimmedPrev = prev.trim();
+          return trimmedPrev ? `${trimmedPrev} ${currentTranscript.trim()}` : currentTranscript.trim();
         });
       }
     };
-
     recognition.onend = () => {
-      // Logic to restart if user didn't manually stop (handles browser timeouts)
       if (isListening) {
-        try {
-            recognition.start();
-        } catch (err) {
-            console.error("Restart error:", err);
-        }
+        try { recognition.start(); } catch (err) { console.error("Restart error:", err); }
       } else {
         setIsListening(false);
       }
     };
-
     recognition.onerror = (event) => {
-      console.error("Speech recognition error:", event.error);
-      if (event.error === 'no-speech') {
-          // Do not stop the UI state, just log it; common in noisy environments
-          return;
-      }
+      if (event.error === 'no-speech') return;
       setIsListening(false);
     };
-
     recognition.start();
   };
 
- const handleAnalyze = async () => {
-  if (!caseDescription.trim()) return;
-  
-  // FIX: Ensures userId is never empty, preventing Mongoose ValidationError
-  const validUserId = currentUserName.trim() === "" ? "Guest" : currentUserName;
-  
-  setIsLoading(true);
-  try {
-    const response = await fetch('http://localhost:5000/api/legal/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        description: caseDescription,
-        userId: validUserId, 
-        language: selectedLanguage 
-      }),
-    });
+  // --- Cleanup on unmount ---
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
 
-    const data = await response.json();
-    
-    // IMPROVEMENT: Check if data contains actual analysis fields
-    const analysisData = data.analysis || data;
-    
-    if (analysisData && (analysisData.penalty || analysisData.law)) {
+  // --- File upload handler ---
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      // Optionally validate file type (image or PDF)
+      const validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
+      if (!validTypes.includes(file.type)) {
+        alert('Please upload an image (JPEG/PNG) or a PDF file.');
+        e.target.value = ''; // clear input
+        return;
+      }
+      setSelectedFile(file);
+    }
+  };
+
+  const clearFile = () => {
+    setSelectedFile(null);
+    document.getElementById('file-upload').value = '';
+  };
+
+  // --- API call ---
+  const handleAnalyze = async () => {
+    if (!caseDescription.trim() && !selectedFile) {
+      alert("Please provide a description or upload an image/PDF.");
+      return;
+    }
+
+    const validUserId = currentUserName.trim() === "" ? "Guest" : currentUserName;
+
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('description', caseDescription);
+      formData.append('userId', validUserId);
+      formData.append('language', selectedLanguage);
+      if (selectedFile) {
+        formData.append('file', selectedFile);
+      }
+
+      const response = await fetch('http://localhost:5000/api/legal/analyze', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+      const analysisData = data.analysis || data;
+      if (analysisData && (analysisData.penalty || analysisData.law)) {
         setAnalysis(analysisData);
         setOpen(true);
-    } else {
+      } else {
         alert("The AI Advisor could not generate a clear analysis. Please try rephrasing.");
+      }
+    } catch (error) {
+      console.error("Analysis failed:", error);
+      alert("Could not connect to the legal database.");
+    } finally {
+      setIsLoading(false);
     }
-    
-  } catch (error) {
-    console.error("Analysis failed:", error);
-    alert("Could not connect to the legal database.");
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
+  // --- PDF generation (unchanged) ---
   const generatePDF = () => {
     if (!analysis) return;
-
     const doc = new jsPDF();
-    
-    // Register Fonts from the imported constants
+    // Register fonts (same as before)
     doc.addFileToVFS("Malayalam.ttf", MALAYALAM_FONT);
     doc.addFont("Malayalam.ttf", "Malayalam", "normal");
-    
     doc.addFileToVFS("Hindi.ttf", HINDI_FONT);
     doc.addFont("Hindi.ttf", "Hindi", "normal");
-
     doc.addFileToVFS("Kannada.ttf", KANNADA_FONT);
     doc.addFont("Kannada.ttf", "Kannada", "normal");
 
-
-    // Dynamic Font Selection for PDF
-    if (selectedLanguage === 'ml-IN') {
-        doc.setFont("Malayalam");
-    } else if (selectedLanguage === 'hi-IN') {
-        doc.setFont("Hindi");
-    } else if (selectedLanguage === 'kn-IN') {
-        doc.setFont("Kannada");
-    } else {
-        doc.setFont("helvetica"); 
-    }
+    if (selectedLanguage === 'ml-IN') doc.setFont("Malayalam");
+    else if (selectedLanguage === 'hi-IN') doc.setFont("Hindi");
+    else if (selectedLanguage === 'kn-IN') doc.setFont("Kannada");
+    else doc.setFont("helvetica");
 
     const date = new Date().toLocaleDateString();
-    let cursorY = 20; 
+    let cursorY = 20;
     const margin = 20;
     const pageHeight = doc.internal.pageSize.height;
 
     const checkPageBreak = (addedHeight) => {
       if (cursorY + addedHeight > pageHeight - 30) {
         doc.addPage();
-        cursorY = 20; 
+        cursorY = 20;
         if (selectedLanguage === 'ml-IN') doc.setFont("Malayalam");
         else if (selectedLanguage === 'hi-IN') doc.setFont("Hindi");
         else if (selectedLanguage === 'kn-IN') doc.setFont("Kannada");
@@ -184,10 +182,9 @@ const LegalAdvisor = () => {
     };
 
     doc.setFontSize(20);
-    doc.setTextColor(5, 150, 105); 
+    doc.setTextColor(5, 150, 105);
     doc.text("EcoLens Legal Advisory Report", margin, cursorY);
     cursorY += 12;
-
     doc.setFontSize(10);
     doc.setTextColor(100);
     doc.text(`Generated on: ${date}`, margin, cursorY);
@@ -230,7 +227,6 @@ const LegalAdvisor = () => {
     doc.setFontSize(11);
     const detailedContent = analysis.appealDraft || analysis.resolution || "";
     const splitDraft = doc.splitTextToSize(detailedContent, 170);
-
     splitDraft.forEach((line) => {
       if (checkPageBreak(7)) {}
       doc.text(line, margin, cursorY);
@@ -251,35 +247,61 @@ const LegalAdvisor = () => {
 
   return (
     <Box sx={{ p: 4, background: 'radial-gradient(circle at 70% 30%, #456d55 0%, #022c18 60%)', minHeight: '100vh' }}>
-      
       <Grid container justifyContent="center">
         <Grid item xs={12} md={8} lg={6}>
-
-          <Paper elevation={0} sx={{ p: 4, borderRadius: 4, border: '2px solid #e2e8f0', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', mt:9 }}>
+          <Paper elevation={0} sx={{ p: 4, borderRadius: 4, border: '2px solid #e2e8f0', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', mt: 9 }}>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-            <FormControl size="small" sx={{ minWidth: 160, bgcolor: 'white', borderRadius: 2 }}>
-              <InputLabel sx={{ display: 'flex', alignItems: 'center', gap: 1, mt :-1 }}>
-                <Languages size={16} /> Language
-              </InputLabel>
-              <ReviewSelect />
-              <Select
-                value={selectedLanguage}
-                label="Language"
-                onChange={(e) => setSelectedLanguage(e.target.value)}
-                sx={{ borderRadius: 2 , border: '1px solid #cbd5e1' }}
-              >
-                <MenuItem value="en-IN">English (India)</MenuItem>
-                <MenuItem value="hi-IN">Hindi (हिन्दी)</MenuItem>
-                <MenuItem value="ml-IN">Malayalam (മലയാളം)</MenuItem>
-                <MenuItem value="ta-IN">Tamil (தமிழ்)</MenuItem>
-                <MenuItem value="kn-IN">Kannada (ಕನ್ನಡ)</MenuItem>
-              </Select>
-            </FormControl>
-          </Box>
+              <FormControl size="small" sx={{ minWidth: 160, bgcolor: 'white', borderRadius: 2 }}>
+                <InputLabel sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: -1 }}>
+                  <Languages size={16} /> Language
+                </InputLabel>
+                <Select
+                  value={selectedLanguage}
+                  label="Language"
+                  onChange={(e) => setSelectedLanguage(e.target.value)}
+                  sx={{ borderRadius: 2, border: '1px solid #cbd5e1' }}
+                >
+                  <MenuItem value="en-IN">English (India)</MenuItem>
+                  <MenuItem value="hi-IN">Hindi (हिन्दी)</MenuItem>
+                  <MenuItem value="ml-IN">Malayalam (മലയാളം)</MenuItem>
+                  <MenuItem value="ta-IN">Tamil (தமிழ்)</MenuItem>
+                  <MenuItem value="kn-IN">Kannada (ಕನ್ನಡ)</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+
             <Typography variant="h6" sx={{ mb: 3, mt: -6, display: 'flex', alignItems: 'center', gap: 1.5, fontWeight: 700, color: '#334155' }}>
               <FileText size={22} color="#059669" /> Case Documentation
             </Typography>
-            
+
+            {/* File Upload Section */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+              <Button
+                variant="outlined"
+                component="label"
+                startIcon={<Paperclip size={18} />}
+                sx={{ textTransform: 'none', borderRadius: 2 }}
+              >
+                Attach File
+                <input
+                  id="file-upload"
+                  type="file"
+                  accept="image/jpeg,image/png,image/jpg,application/pdf"
+                  hidden
+                  onChange={handleFileUpload}
+                />
+              </Button>
+              {selectedFile && (
+                <Chip
+                  label={selectedFile.name}
+                  onDelete={clearFile}
+                  size="small"
+                  sx={{ maxWidth: 250, '& .MuiChip-deleteIcon': { color: '#d32f2f' } }}
+                />
+              )}
+            </Box>
+
+            {/* Text Field */}
             <Box sx={{ position: 'relative' }}>
               <TextField
                 fullWidth
@@ -291,12 +313,12 @@ const LegalAdvisor = () => {
                 onChange={(e) => setCaseDescription(e.target.value)}
                 sx={{ bgcolor: '#ffffff', '& .MuiOutlinedInput-root': { borderRadius: 3, pr: 10 } }}
               />
-              <IconButton 
+              <IconButton
                 onClick={toggleListening}
-                sx={{ 
-                  position: 'absolute', 
-                  right: 15, 
-                  bottom: 15, 
+                sx={{
+                  position: 'absolute',
+                  right: 15,
+                  bottom: 15,
                   bgcolor: isListening ? '#fee2e2' : '#f1f5f9',
                   color: isListening ? '#ef4444' : '#64748b',
                   '&:hover': { bgcolor: isListening ? '#fecaca' : '#e2e8f0' },
@@ -307,22 +329,22 @@ const LegalAdvisor = () => {
               </IconButton>
             </Box>
 
-            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4, pl: 11, pr: 11 }}> 
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4, pl: 11, pr: 11 }}>
               <Button
                 variant="contained"
                 disabled={isLoading}
                 onClick={handleAnalyze}
                 startIcon={isLoading && <CircularProgress size={20} color="inherit" />}
-                sx={{ 
-                  bgcolor: '#059669', 
+                sx={{
+                  bgcolor: '#059669',
                   '&:hover': { bgcolor: '#047857' },
-                  py: 1.8, 
-                  px: 6, 
-                  borderRadius: 3, 
-                  textTransform: 'none', 
-                  fontSize: '1.1rem', 
+                  py: 1.8,
+                  px: 6,
+                  borderRadius: 3,
+                  textTransform: 'none',
+                  fontSize: '1.1rem',
                   fontWeight: 600,
-                  minWidth: '280px' 
+                  minWidth: '280px'
                 }}
               >
                 {isLoading ? "Consulting AI Advisor..." : "Execute Legal Analysis"}
@@ -332,12 +354,12 @@ const LegalAdvisor = () => {
         </Grid>
       </Grid>
 
+      {/* Analysis Dialog */}
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 4, p: 1, boxShadow: 24 } }}>
         <DialogTitle sx={{ m: 0, p: 2, fontWeight: 800, color: '#065f46', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           Official Analysis Insight
-          <IconButton onClick={() => setOpen(false)}><X size={20}/></IconButton>
+          <IconButton onClick={() => setOpen(false)}><X size={20} /></IconButton>
         </DialogTitle>
-        
         <DialogContent sx={{ pb: 3 }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
             <Box>
@@ -364,13 +386,12 @@ const LegalAdvisor = () => {
             </Box>
           </Box>
         </DialogContent>
-
         <DialogActions sx={{ p: 3, gap: 1.5 }}>
           <Button onClick={() => setOpen(false)} sx={{ textTransform: 'none', fontWeight: 700, color: '#64748b' }}>Close Insight</Button>
-          <Button 
-            variant="contained" 
-            color="success" 
-            onClick={generatePDF} 
+          <Button
+            variant="contained"
+            color="success"
+            onClick={generatePDF}
             sx={{ textTransform: 'none', borderRadius: 2.5, fontWeight: 700, bgcolor: '#059669', px: 3, '&:hover': { bgcolor: '#047857' } }}
           >
             Download Official Appeal Package
@@ -380,8 +401,5 @@ const LegalAdvisor = () => {
     </Box>
   );
 };
-
-// Helper component for layout cleanup
-const ReviewSelect = () => null;
 
 export default LegalAdvisor;

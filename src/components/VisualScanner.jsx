@@ -20,7 +20,10 @@ import {
   List,
   ListItem,
   ListItemText,
-  ListItemIcon
+  ListItemIcon,
+  Alert,
+  AlertTitle,
+  Tooltip
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
@@ -33,9 +36,10 @@ import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import MapIcon from '@mui/icons-material/Map';
 import HistoryIcon from '@mui/icons-material/History'; 
 import DescriptionIcon from '@mui/icons-material/Description'; 
-import AccessTimeIcon from '@mui/icons-material/AccessTime'; 
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import WarningIcon from '@mui/icons-material/Warning';
+import InfoIcon from '@mui/icons-material/Info';
 
-// Smooth transition for popups
 const Transition = React.forwardRef(function Transition(props, ref) {
   return <Fade ref={ref} {...props} />;
 });
@@ -54,6 +58,7 @@ export default function VisualScanner({ userEmail }) {
   // Location States
   const [place, setPlace] = useState("Locating...");
   const [coords, setCoords] = useState({ lat: null, lon: null });
+  const [locationError, setLocationError] = useState(null);
   
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -61,15 +66,16 @@ export default function VisualScanner({ userEmail }) {
   const [reportStatus, setReportStatus] = useState(null);
   const [successData, setSuccessData] = useState(null); 
 
-  // --- NEW STATES FOR HISTORY ---
+  // History States
   const [openHistory, setOpenHistory] = useState(false);
   const [historyData, setHistoryData] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  /* ================= 1. ROBUST LOCATION FINDER ================= */
+  // Location Effect
   useEffect(() => {
     if (!navigator.geolocation) {
-      setPlace("Geolocation not supported");
+      setPlace("Location unavailable");
+      setLocationError("Geolocation not supported");
       return;
     }
 
@@ -79,9 +85,8 @@ export default function VisualScanner({ userEmail }) {
           const { latitude, longitude } = pos.coords;
           setCoords({ lat: latitude, lon: longitude });
           
-          // Reverse Geocoding
           const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`
           );
           const data = await res.json();
           const address = data.address || {};
@@ -94,94 +99,27 @@ export default function VisualScanner({ userEmail }) {
             address.town || 
             address.city || 
             address.county ||
-            "Unknown District";
+            address.state_district ||
+            "Unknown Location";
             
           setPlace(locName);
+          setLocationError(null);
         } catch (err) {
           console.error("Location Error:", err);
-          setPlace("Unknown Location");
+          setPlace("Location unavailable");
+          setLocationError("Failed to get location name");
         }
       },
       (err) => {
         console.error("Geo Error:", err);
-        setPlace("Location Access Denied");
+        setPlace("Location access denied");
+        setLocationError("Please enable location access for accurate routing");
       },
-      { enableHighAccuracy: true } 
+      { enableHighAccuracy: true, timeout: 10000 }
     );
   }, []);
 
-  /* ================= 2. STRICT NEAREST AUTHORITY ROUTING (UPGRADED) ================= */
-  const findRealAuthority = async (category, coordinates, placeName) => {
-    const TOMTOM_KEY = "u0ilQFRkdoZ9gPvf1G6ri97BH5ZslXb3"; 
-
-    const catLower = category?.toLowerCase() || "";
-    const isTraffic = catLower.includes("traffic") || catLower.includes("vehicle") || catLower.includes("helmet");
-    const isEnvironmental = catLower.includes("waste") || catLower.includes("garbage") || catLower.includes("burn") || catLower.includes("environmental");
-
-    let searchQueries = [];
-    if (isTraffic) {
-        searchQueries = [`Traffic Police Station`, `Police Station`, `RTO`];
-    } else if (isEnvironmental) {
-        searchQueries = [`Municipality Office`, `Panchayat Office`, `Pollution Control Board`];
-    } else {
-        searchQueries = [`Police Station`];
-    }
-
-    // Radius Expansion: Search outward in waves
-    const searchRadii = [5000, 10000, 20000]; 
-
-    try {
-        for (const radius of searchRadii) {
-            for (const query of searchQueries) {
-                console.log(`🔍 Searching for ${query} within ${radius / 1000}km...`);
-                
-                // Ensure coordinates exist before calling
-                if (!coordinates.lat || !coordinates.lon) continue;
-
-                const url = `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${TOMTOM_KEY}&lat=${coordinates.lat}&lon=${coordinates.lon}&radius=${radius}&limit=10&idxSet=POI`; 
-                
-                const res = await fetch(url);
-                const data = await res.json();
-
-                if (data.results && data.results.length > 0) {
-                    // Distance Sorting: Ensure we pick the absolute closest one
-                    const sortedResults = data.results.sort((a, b) => a.dist - b.dist);
-
-                    for (let item of sortedResults) {
-                        const name = item.poi.name;
-                        const nameLower = name.toLowerCase();
-                        
-                        // The Blocklist
-                        if (nameLower.match(/school|college|bank|atm|hotel|hospital|clinic|shop|store|educational|academy|lodge|residence|quarters|canteen|mess/)) {
-                            continue; 
-                        }
-
-                        // The Allowlist
-                        let isValid = false;
-                        if (isTraffic && nameLower.match(/police|rto|traffic|station|enforcement/)) isValid = true;
-                        if (isEnvironmental && nameLower.match(/municipality|panchayat|corporation|board|council|health|police/)) isValid = true;
-                        if (!isTraffic && !isEnvironmental && nameLower.match(/police|station/)) isValid = true;
-
-                        if (isValid) {
-                            console.log(`✅ Found Nearest Authority: ${name} (${Math.round(item.dist)}m away)`);
-                            return name; 
-                        }
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        console.error("Geospatial Routing Error:", e);
-    }
-
-    // Escalation Fallback (No fake offices!)
-    console.warn(`Local authority not found near ${placeName}. Escalating report.`);
-    if (isTraffic) return "District Traffic Police Headquarters";
-    if (isEnvironmental) return "State Environmental Protection Board";
-    return "Central Dispatch Queue";
-  };
-
-  /* ================= CAMERA LOGIC ================= */
+  // Camera Functions
   const startCamera = () => {
     setError(null);
     setResult(null);
@@ -197,7 +135,6 @@ export default function VisualScanner({ userEmail }) {
     setImgSrc(imageSrc);
   }, [webcamRef]);
 
-  /* ================= UPLOAD LOGIC ================= */
   const handleUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -212,7 +149,7 @@ export default function VisualScanner({ userEmail }) {
     reader.readAsDataURL(file);
   };
 
-  /* ================= ANALYZE LOGIC (AI ENFORCER FOR MULTIPLE VIOLATIONS) ================= */
+  // Analyze Function
   const analyze = async () => {
     try {
       setAnalyzing(true);
@@ -230,61 +167,98 @@ export default function VisualScanner({ userEmail }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          base64: finalImage, 
-          prompt: `You are an AI Enforcement Officer for India. Analyze this image deeply.
-          
-          STEP 1: DETECT ALL INFRACTIONS
-          Scan the entire image and identify EVERY single violation present (Traffic, Environmental, Garbage, Burning, Encroachment, etc.). There may be multiple violations in one scene (e.g., Triple riding AND no helmets AND illegal parking).
-          
-          STEP 2: IDENTIFY LAW & FINE FOR EACH (DYNAMIC)
-          - Do NOT guess. Retrieve the EXACT Indian Act/Section applicable to EACH specific violation.
-          - Example: Triple riding -> "Section 128/194C MV Act". No helmet -> "Section 129/194D MV Act". Burning plastic -> "NGT Act / Section 15 EPA".
-          - Estimate the fine amount in Indian Rupees (₹) for each based on current 2024/2025 standards.
-          
-          STEP 3: FORMAT OUTPUT
-          Return STRICT JSON (No markdown). If no violations are found, set 'violationsFound' to false and leave the array empty.
-          { 
-            "violationsFound": boolean,
-            "totalEstimatedFine": "₹ Total Amount (sum of all fines)",
-            "overallSeverity": "High" | "Medium" | "Low",
-            "violations": [
-              {
-                "category": "Traffic Violation" | "Environmental Violation" | "Civic Issue", 
-                "title": "Precise Violation Name", 
-                "description": "Short observation of the scene for this specific violation", 
-                "law": "Specific Act & Section Number", 
-                "fineAmount": "₹ Amount (e.g. ₹1000)",
-                "severity": "High" | "Medium" | "Low"
-              }
-            ]
-          }`,
-          context: { administrativeArea: place }
+          base64: finalImage
         }),
       });
 
       const data = await response.json();
-      if (!data || data.error) throw new Error(data.error || "Analysis failed.");
+      
+      if (!response.ok) throw new Error(data.error || "Analysis failed.");
+      if (data.error) throw new Error(data.error);
 
       setResult(data);
       setOpenScanner(false); 
       
     } catch (err) {
       setError("Analysis Failed: " + err.message);
+      console.error(err);
     } finally {
       setAnalyzing(false);
     }
   };
 
-  /* ================= REPORT LOGIC (STANDARD DIRECT ROUTING) ================= */
+  // Find Real Authority Function
+  const findRealAuthority = async (category, coordinates, placeName) => {
+    const TOMTOM_KEY = "u0ilQFRkdoZ9gPvf1G6ri97BH5ZslXb3"; 
+
+    const catLower = category?.toLowerCase() || "";
+    const isTraffic = catLower.includes("traffic");
+    const isEnvironmental = catLower.includes("environmental") || catLower.includes("garbage") || catLower.includes("waste");
+
+    let searchQueries = [];
+    if (isTraffic) {
+        searchQueries = [`Traffic Police Station ${placeName}`, `Police Station ${placeName}`, `RTO ${placeName}`];
+    } else if (isEnvironmental) {
+        searchQueries = [`Municipality Office ${placeName}`, `Panchayat Office ${placeName}`, `Pollution Control Board ${placeName}`];
+    } else {
+        searchQueries = [`Police Station ${placeName}`];
+    }
+
+    try {
+        for (const query of searchQueries) {
+            console.log(`🔍 Searching for: ${query}`);
+            
+            if (!coordinates.lat || !coordinates.lon) continue;
+
+            const url = `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${TOMTOM_KEY}&lat=${coordinates.lat}&lon=${coordinates.lon}&radius=10000&limit=5&idxSet=POI`; 
+            
+            const res = await fetch(url);
+            const data = await res.json();
+
+            if (data.results && data.results.length > 0) {
+                const sortedResults = data.results.sort((a, b) => a.dist - b.dist);
+
+                for (let item of sortedResults) {
+                    const name = item.poi.name;
+                    const nameLower = name.toLowerCase();
+                    
+                    // Filter out unwanted results
+                    if (nameLower.match(/school|college|bank|atm|hotel|hospital|clinic|shop|store/)) {
+                        continue; 
+                    }
+
+                    // Validate based on category
+                    let isValid = false;
+                    if (isTraffic && nameLower.match(/police|traffic|rto|enforcement/)) isValid = true;
+                    if (isEnvironmental && nameLower.match(/municipality|panchayat|corporation|board|council/)) isValid = true;
+                    if (!isTraffic && !isEnvironmental && nameLower.match(/police/)) isValid = true;
+
+                    if (isValid) {
+                        console.log(`✅ Found: ${name} (${Math.round(item.dist)}m away)`);
+                        return `${name}, ${item.address?.freeformAddress || placeName}`; 
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Routing Error:", e);
+    }
+
+    // Fallback
+    if (isTraffic) return `Traffic Police Headquarters, ${placeName} District`;
+    if (isEnvironmental) return `State Pollution Control Board, ${placeName}`;
+    return `Police Headquarters, ${placeName}`;
+  };
+
+  // Report Function
   const handleInstantReport = async () => {
     if (!userEmail) {
-        alert("Session Expired. Please login again.");
+        alert("Please login to file a report.");
         return;
     }
     
-    // Safety check: coordinates must be available for radius routing
     if (!coords.lat || !coords.lon) {
-        alert("Precise location is still loading. Please wait a second and try again.");
+        alert("Location is still loading. Please wait a moment.");
         return;
     }
 
@@ -295,22 +269,21 @@ export default function VisualScanner({ userEmail }) {
         const dateString = now.toLocaleDateString('en-IN'); 
         const timeString = now.toLocaleTimeString('en-IN'); 
 
-        // Extract the main category from the first violation for routing purposes
         const mainCategory = result.violations && result.violations.length > 0 
             ? result.violations[0].category 
             : "General";
 
-        // PASS COORDS AND PLACE TO THE NEW FUNCTION
         const realAuthorityName = await findRealAuthority(mainCategory, coords, place);
 
-        // Compile all descriptions into one string for the database
-        const compiledDescription = result.violations?.map(v => `${v.title}: ${v.description} (Law: ${v.law})`).join('\n\n') || "No distinct description.";
+        const compiledDescription = result.violations?.map(v => 
+          `${v.title}: ${v.description} (${v.law}) - Fine: ${v.fineAmount}`
+        ).join('\n\n') || "No violations detected.";
 
         const reportPayload = {
             userEmail: userEmail,
-            title: result.violationsFound ? `${result.violations.length} Violations Detected` : "Detected Violation",
+            title: `${result.violations.length} Violation(s) Detected`,
             category: mainCategory, 
-            severity: result.overallSeverity || "Medium", 
+            severity: result.violations.some(v => v.severity === 'High') ? 'High' : 'Medium', 
             description: compiledDescription,
             location: place, 
             image: imgSrc, 
@@ -324,23 +297,27 @@ export default function VisualScanner({ userEmail }) {
         setResult(null);
         setSuccessData({
             authority: realAuthorityName, 
-            id: res.data.report._id || "CASE-8842",
+            id: res.data.report?._id || `CASE-${Date.now().toString().slice(-6)}`,
             date: dateString,
             time: timeString,
-            category: mainCategory
+            category: mainCategory,
+            violations: result.violations.length
         });
         setReportStatus('success');
 
     } catch (err) {
         console.error(err);
         setReportStatus('error');
-        alert("Failed to submit report. Server might be busy.");
+        alert("Failed to submit report. Please try again.");
     }
   };
 
-  /* ================= HISTORY FETCH LOGIC ================= */
+  // History Function
   const fetchHistory = async () => {
-    if (!userEmail) return;
+    if (!userEmail) {
+      alert("Please login to view history");
+      return;
+    }
     setLoadingHistory(true);
     setOpenHistory(true);
     try {
@@ -354,9 +331,19 @@ export default function VisualScanner({ userEmail }) {
   };
 
   return (
-    <Box sx={{ width: "100%", minHeight: "85vh", bgcolor: "#121212", pb: 5, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+    <Box sx={{ 
+      width: "100%", 
+      minHeight: "85vh", 
+      bgcolor: "#121212", 
+      pb: 5, 
+      display: 'flex', 
+      flexDirection: 'column', 
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      position: 'relative' 
+    }}>
       
-      {/* --- HISTORY BUTTON (Top Right) --- */}
+      {/* History Button */}
       <Box sx={{ position: 'absolute', top: 20, right: 20 }}>
           <Button
             variant="outlined"
@@ -374,17 +361,37 @@ export default function VisualScanner({ userEmail }) {
           </Button>
       </Box>
 
-      {/* --- DASHBOARD HEADER --- */}
+      {/* Location Status */}
+      {locationError && (
+        <Alert 
+          severity="warning" 
+          icon={<WarningIcon />}
+          sx={{ 
+            position: 'absolute', 
+            top: 80, 
+            right: 20, 
+            maxWidth: 300,
+            bgcolor: '#33241a',
+            color: '#ffb74d',
+            border: '1px solid #664d33'
+          }}
+        >
+          <AlertTitle sx={{ color: '#ffb74d', fontWeight: 'bold' }}>Location Warning</AlertTitle>
+          {locationError}
+        </Alert>
+      )}
+
+      {/* Main Content */}
       <Box sx={{ width: "100%", maxWidth: "600px", px: 3, textAlign: "center" }}>
         <Typography variant="h5" fontWeight="800" mb={1} sx={{ 
             background: "linear-gradient(45deg, #FF512F 30%, #DD2476 90%)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent"
         }}>
-          Enforcement Mode
+          AI Enforcement Scanner
         </Typography>
         <Typography variant="body1" mb={4} sx={{ color: "#9ca3af" }}>
-           Automated Violation Detection & Routing System
+          Smart Violation Detection & Routing System
         </Typography>
 
         <Button
@@ -420,10 +427,16 @@ export default function VisualScanner({ userEmail }) {
         <input ref={fileInputRef} hidden type="file" accept="image/*" onChange={handleUpload} />
       </Box>
 
-      {/* --- 1. PREVIEW DIALOG --- */}
-      <Dialog open={openScanner} onClose={() => setOpenScanner(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", borderRadius: 3 } }}>
+      {/* Scanner Dialog */}
+      <Dialog 
+        open={openScanner} 
+        onClose={() => setOpenScanner(false)} 
+        maxWidth="sm" 
+        fullWidth 
+        PaperProps={{ sx: { bgcolor: "#1e1e1e", color: "#fff", borderRadius: 3 } }}
+      >
         <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: '1px solid #333' }}>
-          Scanning Evidence...
+          Capture Evidence
           <IconButton onClick={() => setOpenScanner(false)} sx={{ color: "#fff" }}><CloseIcon /></IconButton>
         </DialogTitle>
         <DialogContent sx={{ height: "450px", display: "flex", flexDirection: "column", gap: 2, p: 0, justifyContent: 'center', alignItems: 'center', bgcolor: "#000" }}>
@@ -448,8 +461,11 @@ export default function VisualScanner({ userEmail }) {
              )}
              {imgSrc && (
                 <Button 
-                   variant="contained" fullWidth onClick={analyze} disabled={analyzing}
-                   sx={{ bgcolor: "#f59e0b", color: "#000", fontWeight: "bold" }}
+                   variant="contained" 
+                   fullWidth 
+                   onClick={analyze} 
+                   disabled={analyzing}
+                   sx={{ bgcolor: "#f59e0b", color: "#000", fontWeight: "bold", "&:disabled": { bgcolor: "#666" } }}
                 >
                    {analyzing ? <CircularProgress size={24} color="inherit" /> : "ANALYZE & DETECT"}
                 </Button>
@@ -463,7 +479,7 @@ export default function VisualScanner({ userEmail }) {
         </DialogContent>
       </Dialog>
 
-      {/* --- 2. RESULT POPUP (UPGRADED FOR MULTIPLE VIOLATIONS) --- */}
+      {/* Results Dialog */}
       <Dialog 
         open={!!result} 
         onClose={() => setResult(null)} 
@@ -481,31 +497,62 @@ export default function VisualScanner({ userEmail }) {
                 <Grid item xs={12} md={7} sx={{ p: 3, borderRight: { md: "1px solid #374151" } }}>
                     <Stack direction="row" alignItems="center" spacing={2} mb={2}>
                         {result?.violationsFound ? 
-                            <Box sx={{ p: 1, bgcolor: "rgba(239,68,68,0.2)", borderRadius: "50%" }}><GppBadIcon color="error" sx={{ fontSize: 32 }} /></Box> : 
-                            <Box sx={{ p: 1, bgcolor: "rgba(34,197,94,0.2)", borderRadius: "50%" }}><CheckCircleIcon color="success" sx={{ fontSize: 32 }} /></Box>
+                            <Box sx={{ p: 1, bgcolor: "rgba(239,68,68,0.2)", borderRadius: "50%" }}>
+                              <GppBadIcon color="error" sx={{ fontSize: 32 }} />
+                            </Box> : 
+                            <Box sx={{ p: 1, bgcolor: "rgba(34,197,94,0.2)", borderRadius: "50%" }}>
+                              <CheckCircleIcon color="success" sx={{ fontSize: 32 }} />
+                            </Box>
                         }
                         <Box>
-                            <Typography variant="overline" color="#94a3b8" fontWeight="bold" letterSpacing={1.2}>STATUS</Typography>
+                            <Typography variant="overline" color="#94a3b8" fontWeight="bold" letterSpacing={1.2}>
+                              SCAN RESULT
+                            </Typography>
                             <Typography variant="h6" fontWeight="900" color={result?.violationsFound ? "#ef4444" : "#22c55e"}>
-                                {result?.violationsFound ? `${result.violations?.length} VIOLATION(S) DETECTED` : "COMPLIANT"}
+                                {result?.violationsFound ? `${result.violations.length} VIOLATION(S) DETECTED` : "NO VIOLATIONS"}
                             </Typography>
                         </Box>
                     </Stack>
 
+                    {/* Classification Info */}
+                    {result?.classification && (
+                      <Box sx={{ mb: 2, p: 1.5, bgcolor: "rgba(255,255,255,0.03)", borderRadius: 2 }}>
+                        <Stack direction="row" alignItems="center" spacing={1}>
+                          <InfoIcon sx={{ fontSize: 16, color: "#94a3b8" }} />
+                          <Typography variant="caption" color="#94a3b8">
+                            Image Type: {result.classification.isTraffic ? 'Traffic' : 'Non-Traffic'} 
+                            ({result.classification.confidence} confidence)
+                          </Typography>
+                        </Stack>
+                      </Box>
+                    )}
+
                     <Divider sx={{ my: 2, bgcolor: "#374151" }} />
 
-                    {/* MAPPED VIOLATIONS LIST */}
-                    <Box sx={{ maxHeight: "350px", overflowY: "auto", pr: 1, mb: 3, "&::-webkit-scrollbar": { width: "6px" }, "&::-webkit-scrollbar-thumb": { backgroundColor: "#475569", borderRadius: "10px" } }}>
+                    {/* Violations List */}
+                    <Box sx={{ 
+                      maxHeight: "350px", 
+                      overflowY: "auto", 
+                      pr: 1, 
+                      mb: 3, 
+                      "&::-webkit-scrollbar": { width: "6px" },
+                      "&::-webkit-scrollbar-thumb": { backgroundColor: "#475569", borderRadius: "10px" }
+                    }}>
                         {result?.violations?.map((violation, index) => (
                             <Box key={index} sx={{ mb: 2, p: 2, bgcolor: "rgba(255,255,255,0.03)", borderRadius: 2, border: "1px solid #374151" }}>
                                 <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={1}>
-                                    <Typography variant="h6" fontWeight="bold" sx={{ fontSize: "1.1rem" }}>{violation.title}</Typography>
+                                    <Typography variant="h6" fontWeight="bold" sx={{ fontSize: "1.1rem" }}>
+                                      {violation.title}
+                                    </Typography>
                                     <Chip 
-                                        label={violation.severity?.toUpperCase() || "PENDING"} 
+                                        label={violation.severity?.toUpperCase() || "MEDIUM"} 
                                         size="small"
                                         sx={{ 
-                                            bgcolor: violation.severity?.toLowerCase() === 'high' ? "#b91c1c" : violation.severity?.toLowerCase() === 'medium' ? "#ca8a04" : "#15803d", 
-                                            color: "#fff", fontWeight: "bold", fontSize: "0.7rem"
+                                            bgcolor: violation.severity?.toLowerCase() === 'high' ? "#b91c1c" : 
+                                                    violation.severity?.toLowerCase() === 'medium' ? "#ca8a04" : "#15803d", 
+                                            color: "#fff", 
+                                            fontWeight: "bold", 
+                                            fontSize: "0.7rem"
                                         }} 
                                     />
                                 </Stack>
@@ -514,12 +561,20 @@ export default function VisualScanner({ userEmail }) {
                                 </Typography>
                                 <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                                     <Box sx={{ bgcolor: "rgba(239, 68, 68, 0.1)", px: 1.5, py: 0.5, borderRadius: 1, border: "1px solid rgba(239, 68, 68, 0.2)" }}>
-                                        <Typography variant="caption" color="#fca5a5" display="block" fontWeight="bold">LAW / SECTION</Typography>
-                                        <Typography variant="body2" color="#f87171" fontWeight="bold" fontFamily="monospace">{violation.law}</Typography>
+                                        <Typography variant="caption" color="#fca5a5" display="block" fontWeight="bold">
+                                          LAW
+                                        </Typography>
+                                        <Typography variant="body2" color="#f87171" fontWeight="bold" fontFamily="monospace">
+                                          {violation.law}
+                                        </Typography>
                                     </Box>
                                     <Box sx={{ bgcolor: "rgba(245, 158, 11, 0.1)", px: 1.5, py: 0.5, borderRadius: 1, border: "1px solid rgba(245, 158, 11, 0.2)" }}>
-                                        <Typography variant="caption" color="#fcd34d" display="block" fontWeight="bold">FINE AMOUNT</Typography>
-                                        <Typography variant="body2" color="#fbbf24" fontWeight="bold">{violation.fineAmount}</Typography>
+                                        <Typography variant="caption" color="#fcd34d" display="block" fontWeight="bold">
+                                          FINE
+                                        </Typography>
+                                        <Typography variant="body2" color="#fbbf24" fontWeight="bold">
+                                          {violation.fineAmount}
+                                        </Typography>
                                     </Box>
                                 </Box>
                             </Box>
@@ -527,53 +582,72 @@ export default function VisualScanner({ userEmail }) {
                     </Box>
 
                     {result?.violationsFound && (
-                         <Button
-                            fullWidth
-                            variant="contained"
-                            color="error"
-                            size="small"
-                            endIcon={reportStatus === 'sending' ? null : <SendIcon />}
-                            onClick={handleInstantReport}
-                            disabled={reportStatus === 'sending'}
-                            sx={{ 
-                                py: 1.5, borderRadius: 2, fontWeight: 'bold', fontSize: '0.9rem',
-                                bgcolor: "#dc2626", "&:hover": { bgcolor: "#b91c1c" }
-                            }}
-                        >
-                            {reportStatus === 'sending' ? "ROUTING TO AUTHORITY..." : "REPORT ALL TO AUTHORITY"}
-                        </Button>
+                         <Tooltip title={!userEmail ? "Please login to report" : ""}>
+                           <span>
+                             <Button
+                                fullWidth
+                                variant="contained"
+                                color="error"
+                                size="small"
+                                endIcon={reportStatus === 'sending' ? null : <SendIcon />}
+                                onClick={handleInstantReport}
+                                disabled={reportStatus === 'sending' || !userEmail}
+                                sx={{ 
+                                    py: 1.5, 
+                                    borderRadius: 2, 
+                                    fontWeight: 'bold', 
+                                    fontSize: '0.9rem',
+                                    bgcolor: "#dc2626", 
+                                    "&:hover": { bgcolor: "#b91c1c" },
+                                    "&:disabled": { bgcolor: "#4a4a4a" }
+                                }}
+                            >
+                                {reportStatus === 'sending' ? "ROUTING..." : "FILE OFFICIAL REPORT"}
+                            </Button>
+                           </span>
+                         </Tooltip>
                     )}
                 </Grid>
 
                 <Grid item xs={12} md={5} sx={{ bgcolor: "#1e293b", p: 3 }}>
                     <Typography variant="overline" color="#94a3b8" fontWeight="bold" display="block" mb={2}>
-                        DIGITAL CASE FILE
+                        CASE SUMMARY
                     </Typography>
 
                     <Stack spacing={2}>
                         <Box>
                             <Stack direction="row" alignItems="center" spacing={1} mb={0.5}>
                                 <MapIcon sx={{ fontSize: 16, color: "#64748b" }} />
-                                <Typography variant="caption" color="#94a3b8" fontWeight="bold">JURISDICTION</Typography>
+                                <Typography variant="caption" color="#94a3b8" fontWeight="bold">
+                                  LOCATION
+                                </Typography>
                             </Stack>
-                            <Typography variant="body2" fontWeight="600" color="#fff">{place}</Typography>
-                        </Box>
-
-                        <Box sx={{ p: 1.5, bgcolor: "rgba(15, 23, 42, 0.6)", borderRadius: 2, border: "1px dashed #475569" }}>
-                            <Typography variant="caption" color="#f87171" fontWeight="bold" display="block" mb={0.5}>
-                                APPLICABLE LAWS
-                            </Typography>
-                            <Typography variant="caption" sx={{ color: "#e2e8f0", fontFamily: "monospace", lineHeight: 1.4, whiteSpace: "pre-wrap", display: "block" }}>
-                                {result?.violationsFound ? "Multiple Statutes Cited (See Details)" : "Pending Legal Review"}
+                            <Typography variant="body2" fontWeight="600" color="#fff">
+                              {place}
                             </Typography>
                         </Box>
 
                         <Box>
                             <Typography variant="caption" color="#94a3b8" fontWeight="bold" display="block" mb={0.5}>
-                                TOTAL CUMULATIVE PENALTY
+                                TOTAL FINE
                             </Typography>
                             <Typography variant="h4" fontWeight="800" color="#ef4444">
-                                {result?.totalEstimatedFine || "₹ --"}
+                                {result?.totalEstimatedFine || "₹0"}
+                            </Typography>
+                        </Box>
+
+                        <Box sx={{ p: 1.5, bgcolor: "rgba(15, 23, 42, 0.6)", borderRadius: 2 }}>
+                            <Typography variant="caption" color="#94a3b8" fontWeight="bold" display="block" mb={1}>
+                                NEXT STEPS
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: "#cbd5e1", fontSize: "0.85rem" }}>
+                                1. Review all detected violations
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: "#cbd5e1", fontSize: "0.85rem" }}>
+                                2. Click "File Official Report" to route to authorities
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: "#cbd5e1", fontSize: "0.85rem" }}>
+                                3. Track status in "Previous Reports"
                             </Typography>
                         </Box>
                     </Stack>
@@ -582,7 +656,7 @@ export default function VisualScanner({ userEmail }) {
         </DialogContent>
       </Dialog>
 
-      {/* --- 3. SUCCESS RECEIPT --- */}
+      {/* Success Dialog */}
       <Dialog 
         open={!!successData} 
         onClose={() => setSuccessData(null)}
@@ -602,7 +676,7 @@ export default function VisualScanner({ userEmail }) {
                   REPORT FILED SUCCESSFULLY
               </Typography>
               <Typography variant="body2" color="text.secondary" mb={3}>
-                  The nearest competent authority has been notified.
+                  {successData?.violations} violation(s) reported to the nearest authority.
               </Typography>
 
               <Card variant="outlined" sx={{ textAlign: 'left', mb: 3, bgcolor: "#f8fafc", border: "1px solid #e2e8f0" }}>
@@ -611,9 +685,11 @@ export default function VisualScanner({ userEmail }) {
                           <Box>
                               <Stack direction="row" alignItems="center" spacing={1} mb={0.5}>
                                 <AccountBalanceIcon sx={{ fontSize: 16, color: "#64748b" }} />
-                                <Typography variant="caption" fontWeight="bold" color="text.secondary">ROUTED TO</Typography>
+                                <Typography variant="caption" fontWeight="bold" color="text.secondary">
+                                  ROUTED TO
+                                </Typography>
                               </Stack>
-                              <Typography variant="subtitle2" fontWeight="bold" color="#0f172a" sx={{ fontSize: "1rem" }}>
+                              <Typography variant="subtitle2" fontWeight="bold" color="#0f172a" sx={{ fontSize: "0.95rem" }}>
                                   {successData?.authority}
                               </Typography>
                           </Box>
@@ -630,9 +706,17 @@ export default function VisualScanner({ userEmail }) {
                                   <Typography variant="body2" fontWeight="bold">{successData?.time}</Typography>
                               </Box>
                           </Stack>
+                          
                           <Box>
-                              <Typography variant="caption" fontWeight="bold" color="text.secondary">CASE ID</Typography>
-                              <Typography variant="body2" fontFamily="monospace" sx={{ letterSpacing: 1, bgcolor: "#e2e8f0", display: "inline-block", px: 1, borderRadius: 1 }}>
+                              <Typography variant="caption" fontWeight="bold" color="text.secondary">REFERENCE ID</Typography>
+                              <Typography variant="body2" fontFamily="monospace" sx={{ 
+                                letterSpacing: 1, 
+                                bgcolor: "#e2e8f0", 
+                                display: "inline-block", 
+                                px: 1.5, 
+                                py: 0.5, 
+                                borderRadius: 1 
+                              }}>
                                 {successData?.id.slice(-8).toUpperCase()}
                               </Typography>
                           </Box>
@@ -644,14 +728,19 @@ export default function VisualScanner({ userEmail }) {
                 variant="contained" 
                 onClick={() => setSuccessData(null)}
                 fullWidth
-                sx={{ bgcolor: "#0f172a", color: "#fff", py: 1.2, "&:hover": { bgcolor: "#334155" } }}
+                sx={{ 
+                  bgcolor: "#0f172a", 
+                  color: "#fff", 
+                  py: 1.2, 
+                  "&:hover": { bgcolor: "#334155" } 
+                }}
               >
-                  CLOSE & SCAN NEXT
+                  CLOSE
               </Button>
           </DialogContent>
       </Dialog>
 
-      {/* --- 4. HISTORY DIALOG --- */}
+      {/* History Dialog */}
       <Dialog 
         open={openHistory} 
         onClose={() => setOpenHistory(false)}
@@ -663,7 +752,7 @@ export default function VisualScanner({ userEmail }) {
         <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: '1px solid #374151' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
               <HistoryIcon sx={{ color: "#f59e0b" }} />
-              <Typography variant="h6" fontWeight="bold">Submission History</Typography>
+              <Typography variant="h6" fontWeight="bold">Your Reports</Typography>
           </Stack>
           <IconButton onClick={() => setOpenHistory(false)} sx={{ color: "#94a3b8" }}><CloseIcon /></IconButton>
         </DialogTitle>
@@ -673,9 +762,19 @@ export default function VisualScanner({ userEmail }) {
                     <CircularProgress color="warning" />
                 </Box>
             ) : historyData.length === 0 ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', opacity: 0.6 }}>
-                    <DescriptionIcon sx={{ fontSize: 60, mb: 2 }} />
-                    <Typography>No reports found.</Typography>
+                <Box sx={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  alignItems: 'center', 
+                  justifyContent: 'center', 
+                  height: '300px', 
+                  opacity: 0.6 
+                }}>
+                    <DescriptionIcon sx={{ fontSize: 60, mb: 2, color: '#4b5563' }} />
+                    <Typography color="#9ca3af">No reports found.</Typography>
+                    <Typography variant="caption" color="#6b7280" sx={{ mt: 1 }}>
+                        Scan and report violations to see them here.
+                    </Typography>
                 </Box>
             ) : (
                 <List>
@@ -683,7 +782,7 @@ export default function VisualScanner({ userEmail }) {
                         <Card key={report._id} variant="outlined" sx={{ mb: 2, bgcolor: "#1e293b", borderColor: "#334155" }}>
                             <ListItem alignItems="flex-start" sx={{ px: 2, py: 1.5 }}>
                                 <ListItemIcon sx={{ minWidth: 40, mt: 1 }}>
-                                    {report.category.toLowerCase().includes('traffic') ? 
+                                    {report.category?.toLowerCase().includes('traffic') ? 
                                         <GppBadIcon sx={{ color: '#ef4444', fontSize: 28 }} /> : 
                                         <MapIcon sx={{ color: '#22c55e', fontSize: 28 }} />
                                     }
@@ -692,7 +791,7 @@ export default function VisualScanner({ userEmail }) {
                                     primary={
                                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
                                             <Typography variant="subtitle1" fontWeight="bold" color="#fff">
-                                                {report.title}
+                                                {report.title || 'Violation Report'}
                                             </Typography>
                                             <Chip 
                                                 label={report.status || "Forwarded"} 
@@ -711,7 +810,7 @@ export default function VisualScanner({ userEmail }) {
                                             <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
                                                 <AccountBalanceIcon sx={{ fontSize: 14, color: "#94a3b8" }} />
                                                 <Typography variant="body2" color="#cbd5e1">
-                                                    {report.forwardedTo || "Pending Assignment"}
+                                                    {report.forwardedTo || "Awaiting Assignment"}
                                                 </Typography>
                                             </Stack>
                                             <Stack direction="row" alignItems="center" spacing={0.5}>
@@ -731,6 +830,26 @@ export default function VisualScanner({ userEmail }) {
         </DialogContent>
       </Dialog>
 
+      {/* Error Display */}
+      {error && (
+        <Alert 
+          severity="error" 
+          sx={{ 
+            position: 'fixed', 
+            bottom: 20, 
+            left: '50%', 
+            transform: 'translateX(-50%)',
+            maxWidth: 500,
+            bgcolor: '#2d1a1a',
+            color: '#ff8a80',
+            border: '1px solid #b71c1c'
+          }}
+          onClose={() => setError(null)}
+        >
+          <AlertTitle>Error</AlertTitle>
+          {error}
+        </Alert>
+      )}
     </Box>
   );
 }

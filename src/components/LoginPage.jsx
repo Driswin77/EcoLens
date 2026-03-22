@@ -85,7 +85,7 @@ const res = await axios.post(`${API_URL}${endpoint}`, payload);
           <div className="form-group">
             <label htmlFor="email">EMAIL ADDRESS</label>
             <div className="input-wrapper">
-              <span className="input-icon">✉️</span> {/* Email Icon */}
+              <span className="input-icon"></span> {/* Email Icon */}
               <input
                 type="email"
                 id="email"
@@ -101,7 +101,7 @@ const res = await axios.post(`${API_URL}${endpoint}`, payload);
           <div className="form-group">
             <label htmlFor="password">PASSWORD</label>
             <div className="input-wrapper">
-              <span className="input-icon">🔒</span>
+              <span className="input-icon"></span>
               <input
                 type="password"
                 id="password"

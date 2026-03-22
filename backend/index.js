@@ -9,6 +9,25 @@ import path from "path";
 import nodemailer from "nodemailer"; 
 import bcrypt from "bcryptjs"; 
 import cron from "node-cron"; 
+import { exec } from "child_process";
+import { promisify } from "util";
+
+import { fileURLToPath } from 'url';
+// --- At the top of index.js (after other imports) ---
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse');
+
+// --- The multer configuration (unchanged) ---
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Promisify exec for cleaner async/await
+const execAsync = promisify(exec);
+
+// ✅ FIX __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -25,8 +44,8 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER || 'driswin092@gmail.com', // 🔴 YOUR GMAIL
-    pass: process.env.EMAIL_PASS || 'znsrxofufivsbcsd'      // 🔴 YOUR APP PASSWORD
+    user: process.env.EMAIL_USER || 'driswin092@gmail.com',
+    pass: process.env.EMAIL_PASS || 'znsrxofufivsbcsd'
   }
 });
 
@@ -44,7 +63,7 @@ const sendWelcomeEmail = async (email, name) => {
         
         <h3 style="color: #1b5e20;">🚀 What you can do with this app:</h3>
         <ul>
-          <li><strong>📸 Visual Scanner:</strong> Instantly detect traffic & environmental violations using AI.</li>
+          <li><strong>📸 Visual Scanner:</strong> Instantly detect traffic & environmental violations using AI with real-time fine updates and automatic number plate recognition.</li>
           <li><strong>📍 Smart Routing:</strong> Reports are automatically sent to the nearest Police Station or Municipality based on your GPS.</li>
           <li><strong>🗺️ Eco Map:</strong> Find fuel-efficient routes to reduce carbon emissions.</li>
           <li><strong>📂 Digital Glovebox:</strong> Securely store your RC, License, and Insurance.</li>
@@ -65,38 +84,67 @@ const sendWelcomeEmail = async (email, name) => {
   }
 };
 
-// --- HELPER: OFFICIAL ALERT EMAIL ---
+// --- HELPER: OFFICIAL ALERT EMAIL (UPDATED WITH NUMBER PLATES) ---
 const sendOfficialAlert = async (report, authorityName) => {
+  // Format number plates for email
+  const platesHtml = report.number_plates && report.number_plates.length > 0 
+    ? `<div style="background-color: #e3f2fd; padding: 15px; margin: 15px 0; border-left: 4px solid #2196f3; border-radius: 4px;">
+        <h3 style="margin: 0 0 10px 0; color: #1976d2; font-size: 16px;">📋 VEHICLE NUMBER PLATES DETECTED</h3>
+        ${report.number_plates.map(plate => `
+          <p style="margin: 8px 0; font-family: 'Courier New', monospace; font-size: 18px; font-weight: bold; background: #f5f5f5; padding: 8px; border-radius: 4px;">
+            <span style="color: #0d47a1;">${plate.plate_number || 'Not readable'}</span> 
+            <span style="color: #666; font-size: 12px; margin-left: 10px;">(Confidence: ${Math.round(plate.ocr_confidence * 100)}%)</span>
+          </p>
+        `).join('')}
+      </div>`
+    : '<p style="color: #666; font-style: italic;">No number plates detected in the evidence image.</p>';
+
   const mailOptions = {
     from: '"EcoLens Enforcer" <no-reply@ecopenalty.gov>',
-    to: 'recipient_email@gmail.com', // 🔴 RECIPIENT EMAIL (Replace with authority email logic if needed)
-    subject: ` OFFICIAL ALERT: ${report.category} Detected - ${authorityName}`,
+    to: 'recipient_email@gmail.com',
+    subject: `⚡ OFFICIAL ALERT: ${report.category} Detected - ${authorityName}`,
     html: `
-      <div style="font-family: Arial, sans-serif; border: 1px solid #333; padding: 20px; max-width: 600px;">
+      <div style="font-family: Arial, sans-serif; border: 1px solid #333; padding: 20px; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #d32f2f; border-bottom: 2px solid #d32f2f; padding-bottom: 10px;">
-          ⚠️ Violation Report #${report._id.toString().slice(-6).toUpperCase()}
+          ⚠️ VIOLATION REPORT #${report._id.toString().slice(-6).toUpperCase()}
         </h2>
         
-        <p><strong>To:</strong> ${authorityName}</p>
-        <p><strong>Reporter Email:</strong> ${report.userEmail}</p>
-        <p><strong>Date:</strong> ${report.offenseDate || new Date().toLocaleDateString()} | 
-           <strong>Time:</strong> ${report.offenseTime || new Date().toLocaleTimeString()}</p>
+        <table style="width: 100%; margin: 15px 0; border-collapse: collapse;">
+           <tr>
+            <td style="padding: 8px; background: #f5f5f5;"><strong>To:</strong></td>
+            <td style="padding: 8px;">${authorityName}</td>
+           </tr>
+           <tr>
+            <td style="padding: 8px; background: #f5f5f5;"><strong>Reporter:</strong></td>
+            <td style="padding: 8px;">${report.userEmail}</td>
+           </tr>
+           <tr>
+            <td style="padding: 8px; background: #f5f5f5;"><strong>Date/Time:</strong></td>
+            <td style="padding: 8px;">${report.offenseDate || new Date().toLocaleDateString()} at ${report.offenseTime || new Date().toLocaleTimeString()}</td>
+           </tr>
+         </table>
         
-        <div style="background-color: #f9f9f9; padding: 15px; margin: 20px 0; border-left: 4px solid #d32f2f;">
-          <h3 style="margin-top: 0;">Offense Details</h3>
-          <ul style="line-height: 1.6;">
+        ${platesHtml}
+        
+        <div style="background-color: #f9f9f9; padding: 15px; margin: 20px 0; border-left: 4px solid #d32f2f; border-radius: 4px;">
+          <h3 style="margin-top: 0; color: #d32f2f;">🚨 OFFENSE DETAILS</h3>
+          <ul style="line-height: 1.8; padding-left: 20px;">
             <li><strong>Violation:</strong> ${report.title}</li>
             <li><strong>Category:</strong> ${report.category}</li>
-            <li><strong>Severity:</strong> <span style="color: red; font-weight: bold;">${report.severity}</span></li>
+            <li><strong>Severity:</strong> <span style="color: ${report.severity === 'High' ? '#d32f2f' : '#ed6c02'}; font-weight: bold;">${report.severity}</span></li>
             <li><strong>Location:</strong> ${report.location}</li>
           </ul>
         </div>
 
-        <p><strong>Officer Observation:</strong><br/>${report.description}</p>
+        <div style="background-color: #fff3e0; padding: 15px; margin: 20px 0; border-left: 4px solid #ed6c02; border-radius: 4px;">
+          <h3 style="margin-top: 0; color: #ed6c02;">📝 OFFICER OBSERVATION</h3>
+          <p style="line-height: 1.6;">${report.description}</p>
+        </div>
 
-        <div style="margin-top: 20px; font-size: 12px; color: #666; text-align: center;">
-          <p>Automated dispatch via EcoLens System.<br/>
-          Evidence attached below.</p>
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; text-align: center;">
+          <p>⚡ This is an automated dispatch from the EcoLens Enforcement System.</p>
+          <p>📸 Evidence photo is attached below. Please take necessary action as per law.</p>
+          <p style="margin-top: 15px;">🔔 This is a system generated report. Do not reply to this email.</p>
         </div>
       </div>
     `,
@@ -111,9 +159,9 @@ const sendOfficialAlert = async (report, authorityName) => {
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`📧 EMAIL SENT SUCCESSFULLY to Authority`);
+    console.log(`📧 OFFICIAL ALERT EMAIL SENT to Authority`);
   } catch (error) {
-    console.error("❌ EMAIL FAILED:", error);
+    console.error("❌ OFFICIAL ALERT EMAIL FAILED:", error);
   }
 };
 
@@ -126,7 +174,7 @@ let isCloudConnected = false;
 if (MONGO_URI) {
     mongoose.connect(MONGO_URI)
         .then(() => {
-            console.log("CONNECTED TO DB....");
+            console.log("✅ CONNECTED TO MongoDB");
             isCloudConnected = true;
         })
         .catch(err => console.error("⚠️ Cloud Connection Error:", err.message));
@@ -134,7 +182,7 @@ if (MONGO_URI) {
     console.log("⚠️ No MONGO_URI. Using Local Mode (DB features may fail).");
 }
 
-// --- SCHEMAS ---
+// --- SCHEMAS (UPDATED WITH NUMBER PLATES) ---
 const UserSchema = new mongoose.Schema({
   name: String,
   email: { type: String, required: true, unique: true },
@@ -162,6 +210,11 @@ const IssueSchema = new mongoose.Schema({
   description: String,
   location: String,
   image: String,
+  number_plates: [{
+    plate_number: String,
+    detection_confidence: Number,
+    ocr_confidence: Number
+  }],
   status: { type: String, default: "Forwarded" }, 
   forwardedTo: String, 
   offenseDate: String, 
@@ -170,15 +223,14 @@ const IssueSchema = new mongoose.Schema({
 });
 const IssueReport = mongoose.model("IssueReport", IssueSchema);
 
-// --- INDUSTRY ENFORCEMENT SCHEMA (PRESERVED FOR STRUCTURE ONLY) ---
 const IndustryHistorySchema = new mongoose.Schema({
-  name: { type: String, required: true }, // e.g., "Apex Chemicals"
+  name: { type: String, required: true },
   location: {
     lat: Number,
     lon: Number,
     address: String
   },
-  email: { type: String }, // Contact email of the industry
+  email: { type: String },
   violationCount: { type: Number, default: 0 },
   history: [
     {
@@ -196,32 +248,53 @@ const IndustryHistorySchema = new mongoose.Schema({
 });
 const IndustryHistory = mongoose.model("IndustryHistory", IndustryHistorySchema);
 
-// --- LEGAL ADVISOR SCHEMA (UPDATED) ---
 const legalAdvisorSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   description: { type: String, required: true },
-  language: { type: String, default: 'English' }, // New field to track the selected language
+  language: { type: String, default: 'English' },
   analysis: {
     penalty: String,
     law: String,
     resolution: String,
-    appealDraft: String // Added to match your latest backend prompt
+    appealDraft: String
   },
   status: { type: String, default: 'Active' },
   createdAt: { type: Date, default: Date.now }
 });
 
 const LegalAdvisor = mongoose.model('LegalAdvisor', legalAdvisorSchema, 'LegalAdvisor');
+
 // =========================================================
 // 3. AI HELPERS (Gemini)
 // =========================================================
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Safe JSON parser
+function safeJSONParse(text, defaultValue = {}) {
+  try {
+    // Remove markdown code blocks
+    let cleanText = text.replace(/```json|```/g, "").trim();
+    
+    // Find first { and last }
+    const firstBrace = cleanText.indexOf("{");
+    const lastBrace = cleanText.lastIndexOf("}");
+    
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+    }
+    
+    return JSON.parse(cleanText);
+  } catch (error) {
+    console.error("JSON Parse Error:", error.message);
+    console.error("Raw text:", text.substring(0, 200) + "...");
+    return defaultValue;
+  }
+}
+
 async function callGeminiAI(prompt, base64Image = null, mimeType = "image/jpeg") {
     const API_KEY = process.env.GEMINI_API_KEY;
     
-    // Priority is Gemini 2.5 Flash
     const modelsToTry = [
         "gemini-2.5-flash",
         "gemini-2.0-flash", 
@@ -267,35 +340,115 @@ async function callGeminiAI(prompt, base64Image = null, mimeType = "image/jpeg")
     throw new Error("All AI models failed or are busy. Please try again later.");
 }
 
-// B. REAL-TIME RULES GENERATOR
+// Traffic Classification Prompt
+const TRAFFIC_CLASSIFICATION_PROMPT = `You are an AI traffic image classifier. Analyze this image carefully.
+
+TASK: Determine if this image is TRAFFIC-RELATED or NOT.
+
+Traffic-related images include:
+- Vehicles on roads (cars, bikes, trucks, buses)
+- Traffic violations (triple riding, wrong side, etc.)
+- Traffic signals, signs, or road infrastructure
+- Accidents or traffic jams
+- Parking violations
+
+Non-traffic images include:
+- Garbage dumps, waste, litter (unless directly blocking traffic)
+- Environmental issues (burning waste, pollution) - these are separate
+- Buildings, landscapes, nature
+- People not on roads
+- Animals (unless causing traffic obstruction)
+
+CRITICAL: Return ONLY valid JSON in this exact format:
+{
+  "isTraffic": true/false,
+  "confidence": "High/Medium/Low",
+  "reason": "Brief explanation of classification"
+}`;
+
+// Enhanced Violation Detection Prompt with REAL-TIME fine calculation
+const VIOLATION_DETECTION_PROMPT = `You are an AI enforcement officer for India with REAL-TIME access to current laws and fines. Analyze this image and identify ALL violations present.
+
+CRITICAL INSTRUCTIONS:
+1. First, identify the type of vehicle(s) present (car, motorcycle, truck, bus, bicycle, etc.)
+2. For motorcycle/scooter, check for helmet violations
+3. For cars and other four-wheelers, DO NOT report helmet violations
+4. For EVERY violation detected, determine the CURRENT fine amount based on LATEST laws
+5. Consider recent amendments and notifications (including December 2023 updates)
+6. Fines should be specific to Kerala state regulations
+7. Include the legal source for each fine
+
+FINE REFERENCE GUIDE:
+- Waste dumping spot fines: ₹5,000 (Kerala Municipality Amendment Dec 2023)
+- Plastic ban violations: ₹25,000 first offense (Kerala Plastic Ban Rules)
+- Industrial waste: ₹50,000 - ₹5,00,000 (Water/Environment Protection Act)
+- Traffic violations: Refer to Motor Vehicles (Kerala Amendment) Act, 2023
+- Burning waste: ₹10,000 (NGT guidelines)
+- No helmet for two-wheeler: ₹500-1000 (Section 129 MV Act)
+- HSRP violation: ₹5,000-10,000 (Central Motor Vehicles Rules)
+
+Return STRICT JSON in this format:
+{
+  "violationsFound": true/false,
+  "vehicleType": "car/motorcycle/truck/bus/auto/unknown",
+  "violations": [
+    {
+      "category": "Traffic Violation" or "Environmental Violation" or "Civic Issue",
+      "title": "Specific Violation Name",
+      "description": "Brief description of what you observed",
+      "law": "Specific Act and Section",
+      "fineAmount": number,
+      "fineReference": "Source of fine with date",
+      "severity": "High/Medium/Low"
+    }
+  ]
+}
+
+If no violations found, return: { "violationsFound": false, "vehicleType": "unknown", "violations": [] }`;
+
+// REAL-TIME RULES GENERATOR
 async function getLocalRulesWithAI(location) {
     try {
         console.log(`🤖 Fetching laws for: ${location}`);
         const prompt = `
-        You are a legal expert for ${location}.
+        You are a legal expert for ${location} with access to current laws and fines.
         List 4 specific TRAFFIC rules and 4 ENVIRONMENTAL rules enforced in ${location}.
-        Include the typical Fine Amount in the description.
+        For each rule, include:
+        - The exact title
+        - Brief description
+        - CURRENT fine amount (as per latest amendments)
+        - Legal reference with date
 
         Output STRICT JSON format only:
         {
-          "traffic": [ { "title": "Rule Name", "desc": "Brief description with Fine amount." } ],
-          "eco": [ { "title": "Rule Name", "desc": "Brief description with Fine amount." } ]
+          "traffic": [ 
+            { 
+              "title": "Rule Name", 
+              "desc": "Brief description with CURRENT Fine amount and legal reference.",
+              "fine": number,
+              "law": "Specific section"
+            } 
+          ],
+          "eco": [ 
+            { 
+              "title": "Rule Name", 
+              "desc": "Brief description with CURRENT Fine amount and legal reference.",
+              "fine": number,
+              "law": "Specific section" 
+            } 
+          ]
         }
         `;
 
         const text = await callGeminiAI(prompt);
-        const cleanJson = text.replace(/```json|```/g, "").trim();
-        const firstBrace = cleanJson.indexOf("{");
-        const lastBrace = cleanJson.lastIndexOf("}");
-        const finalJson = (firstBrace !== -1 && lastBrace !== -1) ? cleanJson.substring(firstBrace, lastBrace + 1) : "{}";
-        return JSON.parse(finalJson);
+        return safeJSONParse(text, { traffic: [], eco: [] });
     } catch (e) {
         console.error("Rules Fetch Failed:", e.message);
         return null; 
     }
 }
 
-// C. DOCUMENT SCANNER
+// DOCUMENT SCANNER
 async function scanDocumentWithAI(base64Image, mimeType) {
   try {
     const prompt = `
@@ -310,67 +463,22 @@ async function scanDocumentWithAI(base64Image, mimeType) {
     `;
 
     const text = await callGeminiAI(prompt, base64Image, mimeType);
+    const result = safeJSONParse(text, { 
+      type: "Document", 
+      plate_number: "Unknown", 
+      expiry_date: new Date().toISOString().split('T')[0] 
+    });
     
-    const cleanJson = text.replace(/```json|```/g, "").trim();
-    const firstBrace = cleanJson.indexOf("{");
-    const lastBrace = cleanJson.lastIndexOf("}");
-    const finalJson = (firstBrace !== -1 && lastBrace !== -1) ? cleanJson.substring(firstBrace, lastBrace + 1) : "{}";
-    
-    console.log("📄 AI Scan Result:", finalJson);
-    return JSON.parse(finalJson);
+    console.log("📄 AI Scan Result:", result);
+    return result;
   } catch (e) {
     console.error("❌ Critical Scan Error:", e.message);
-    return { type: "Document", plate_number: "Manual Check", expiry_date: new Date().toISOString().split('T')[0] };
+    return { 
+      type: "Document", 
+      plate_number: "Manual Check", 
+      expiry_date: new Date().toISOString().split('T')[0] 
+    };
   }
-}
-
-// D. VISUAL SCANNER (UPGRADED FOR MULTIPLE VIOLATIONS)
-async function analyzeTrafficWithAI(base64Image, contextOrPrompt) {
-    let finalPrompt = `
-    Analyze traffic/environmental image. 
-    Strictly Output JSON (No markdown): 
-    { 
-      "violationsFound": boolean,
-      "totalEstimatedFine": "Total amount in ₹",
-      "overallSeverity": "High/Medium/Low",
-      "violations": [
-          {
-            "category": "Traffic" or "Environmental", 
-            "title": "Short Title", 
-            "description": "Brief description", 
-            "law": "Indian Law Section", 
-            "fineAmount": "Estimated Fine in ₹",
-            "severity": "High/Medium/Low"
-          }
-      ]
-    }`;
-    
-    if (typeof contextOrPrompt === 'string' && contextOrPrompt.length > 10) {
-        finalPrompt = contextOrPrompt;
-    } else if (contextOrPrompt && contextOrPrompt.prompt) {
-        finalPrompt = contextOrPrompt.prompt;
-    }
-
-    try {
-        const text = await callGeminiAI(finalPrompt, base64Image, "image/jpeg");
-        let cleanJson = text.replace(/```json|```/g, "").trim();
-        const firstBrace = cleanJson.indexOf("{");
-        const lastBrace = cleanJson.lastIndexOf("}");
-        
-        if (firstBrace !== -1 && lastBrace !== -1) {
-            cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
-        }
-        
-        return JSON.parse(cleanJson);
-    } catch (e) {
-        console.error("AI Analysis Error:", e);
-        return { 
-            violationsFound: false, 
-            totalEstimatedFine: "₹0",
-            overallSeverity: "Low",
-            violations: [{ category: "Error", title: "Analysis Failed", description: e.message, law: "N/A", fineAmount: "₹0", severity: "Low" }] 
-        };
-    }
 }
 
 // =========================================================
@@ -397,7 +505,7 @@ const determineRealAuthority = (category, locationString) => {
                 return `Secretary, ${localBodyType} (Engineering Wing) - ${locationString}`;
             }
         case 'Environmental':
-        case 'Industrial': // DIRECT ROUTING FOR INDUSTRIAL VIOLATIONS
+        case 'Industrial':
             return `Environmental Engineer, State Pollution Control Board (District Office) - ${locationString}`;
         case 'Garbage / Waste':
             return `Health Inspector, ${localBodyType} - ${locationString} Circle`;
@@ -407,29 +515,24 @@ const determineRealAuthority = (category, locationString) => {
 };
 
 // =========================================================
-// 5. AUTOMATED 3-DAY EXPIRY REMINDER (Runs Daily at 9 AM)
+// 5. AUTOMATED 3-DAY EXPIRY REMINDER
 // =========================================================
 cron.schedule('0 9 * * *', async () => {
     console.log("⏰ Running Daily 3-Day Expiry Check...");
 
-    // Check Cloud Connection
     if (!isCloudConnected) {
         console.log("⚠️ Database not connected, skipping check.");
         return;
     }
 
     try {
-        // 1. Calculate the Target Date (Today + 3 Days)
         const today = new Date();
         const targetDate = new Date();
         targetDate.setDate(today.getDate() + 3);
-
-        // Format to YYYY-MM-DD to match your DB string format
         const targetStr = targetDate.toISOString().split('T')[0];
 
         console.log(`🔍 Looking for documents expiring on: ${targetStr}`);
 
-        // 2. Find documents matching this expiry date
         const expiringDocs = await Document.find({ expiry: targetStr });
 
         if (expiringDocs.length === 0) {
@@ -439,7 +542,6 @@ cron.schedule('0 9 * * *', async () => {
 
         console.log(`⚠️ Found ${expiringDocs.length} documents expiring in 3 days.`);
 
-        // 3. Loop through and send emails
         for (const doc of expiringDocs) {
             const mailOptions = {
                 from: '"Eco Glovebox" <no-reply@ecopenalty.gov>',
@@ -477,7 +579,93 @@ cron.schedule('0 9 * * *', async () => {
 });
 
 // =========================================================
-// 6. API ROUTES
+// 6. YOLO HELMET DETECTION (IMPROVED)
+// =========================================================
+async function detectHelmet(imagePath) {
+  try {
+    console.log("🚀 Running YOLO for helmet detection...");
+    
+    const { stdout, stderr } = await execAsync(`python detect.py "${imagePath}"`);
+    
+    if (stderr) {
+      console.warn("YOLO Stderr:", stderr);
+    }
+    
+    const output = stdout.trim();
+    console.log("YOLO Output:", output);
+    
+    // Parse the output to determine helmet status
+    if (output.includes("With Helmet") || output.includes("Helmet Detected")) {
+      return "with_helmet";
+    } else if (output.includes("No Helmet") || output.includes("Without Helmet")) {
+      return "no_helmet";
+    } else {
+      return "unknown";
+    }
+  } catch (error) {
+    console.error("YOLO Error:", error);
+    return "error";
+  }
+}
+
+// =========================================================
+// 7. NUMBER PLATE DETECTION (IMPROVED)
+// =========================================================
+async function detectNumberPlate(imagePath) {
+  try {
+    console.log("🚗 Running number plate detection...");
+    
+    const { stdout, stderr } = await execAsync(`python detect_plate.py "${imagePath}"`);
+    
+    if (stderr) {
+      console.warn("Number Plate Stderr:", stderr);
+    }
+    
+    // Try to parse the JSON output
+    try {
+      const result = JSON.parse(stdout.trim());
+      console.log("📸 Number plate result:", result);
+      return result;
+    } catch (parseError) {
+      console.error("Failed to parse number plate output:", parseError);
+      console.log("Raw output:", stdout);
+      return { plates_found: 0, plates: [] };
+    }
+  } catch (error) {
+    console.error("Number Plate Error:", error);
+    return { plates_found: 0, plates: [] };
+  }
+}
+
+// =========================================================
+// 8. VEHICLE TYPE DETECTION (NEW)
+// =========================================================
+async function detectVehicleType(imagePath) {
+  try {
+    console.log("🚗 Running vehicle type detection...");
+    
+    const { stdout, stderr } = await execAsync(`python detect_vehicle.py "${imagePath}"`);
+    
+    if (stderr) {
+      console.warn("Vehicle Detection Stderr:", stderr);
+    }
+    
+    try {
+      const result = JSON.parse(stdout.trim());
+      console.log("🚙 Vehicle type result:", result);
+      return result;
+    } catch (parseError) {
+      console.error("Failed to parse vehicle detection output:", parseError);
+      return { vehicleType: 'unknown', confidence: 0 };
+    }
+  } catch (error) {
+    console.error("Vehicle Detection Error:", error);
+    return { vehicleType: 'unknown', confidence: 0 };
+  }
+}
+
+// =========================================================
+// 9. API ROUTES
 // =========================================================
 
 app.post("/get-local-laws", async (req, res) => {
@@ -487,27 +675,25 @@ app.post("/get-local-laws", async (req, res) => {
     else res.status(500).json({ success: false });
 });
 
-// --- SIGNUP ROUTE (EMAIL + WELCOME MAIL) ---
+// --- SIGNUP ROUTE ---
 app.post("/signup", async (req, res) => {
     try {
         const { name, email, password } = req.body;
         if (!isCloudConnected) return res.status(503).json({ error: "Cloud offline" });
         
-        // Check existing by Email
         const existingUser = await User.findOne({ email });
         if (existingUser) return res.status(400).json({ error: "Email already registered." });
 
-        // Hash Password
         const hashedPassword = await bcrypt.hash(password, 10);
-
         const newUser = new User({ name, email, password: hashedPassword });
         await newUser.save();
         
-        // 📨 TRIGGER WELCOME EMAIL
         sendWelcomeEmail(email, name);
 
         res.json({ success: true, user: { name: newUser.name, email: newUser.email } });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
 // --- LOGIN ROUTE ---
@@ -516,18 +702,19 @@ app.post("/login", async (req, res) => {
         const { email, password } = req.body;
         if (!isCloudConnected) return res.status(503).json({ error: "Cloud offline" });
         
-        // Find User by Email
         const user = await User.findOne({ email });
         if (!user) return res.status(404).json({ error: "User not found." });
 
-        // Verify Password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ error: "Invalid Credentials" });
 
         res.json({ success: true, user: { name: user.name, email: user.email } });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
+// --- UPLOAD DOCUMENT ---
 app.post("/upload-doc", async (req, res) => {
   try {
     const { image, name, userEmail } = req.body;
@@ -542,36 +729,59 @@ app.post("/upload-doc", async (req, res) => {
 
     let aiData = await scanDocumentWithAI(cleanBase64, mimeType);
 
-    if (!aiData || aiData.type === "Error") {
-        aiData = { type: "Document", plate_number: "Manual Check", expiry_date: new Date().toISOString().split('T')[0] };
+    const newDoc = new Document({ 
+      userEmail, 
+      name, 
+      type: aiData.type, 
+      plate: aiData.plate_number, 
+      expiry: aiData.expiry_date, 
+      image 
+    });
+    
+    if (isCloudConnected) { 
+      await newDoc.save(); 
+      res.json({ success: true, doc: newDoc }); 
+    } else { 
+      res.status(503).json({ error: "Cloud offline" }); 
     }
-
-    // Save with userEmail
-    const newDoc = new Document({ userEmail, name, type: aiData.type, plate: aiData.plate_number, expiry: aiData.expiry_date, image });
-    if (isCloudConnected) { await newDoc.save(); res.json({ success: true, doc: newDoc }); } 
-    else { res.status(503).json({ error: "Cloud offline" }); }
-  } catch (error) { res.status(500).json({ error: error.message }); }
+  } catch (error) { 
+    res.status(500).json({ error: error.message }); 
+  }
 });
 
+// --- GET USER DOCUMENTS ---
 app.get("/my-docs", async (req, res) => {
   try {
       const { userEmail } = req.query;
       if (isCloudConnected) {
           const docs = await Document.find({ userEmail }); 
           res.json(docs.map(d => ({ ...d._doc, id: d._id.toString() })).sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)));
-      } else { res.json([]); }
-  } catch (error) { res.status(500).json({ error: error.message }); }
+      } else { 
+        res.json([]); 
+      }
+  } catch (error) { 
+    res.status(500).json({ error: error.message }); 
+  }
 });
 
+// --- DELETE DOCUMENT ---
 app.delete("/delete-doc/:id", async (req, res) => {
-  if (isCloudConnected) { await Document.findByIdAndDelete(req.params.id); res.json({ success: true }); }
-  else { res.status(503).json({ error: "Cloud offline" }); }
+  if (isCloudConnected) { 
+    await Document.findByIdAndDelete(req.params.id); 
+    res.json({ success: true }); 
+  } else { 
+    res.status(503).json({ error: "Cloud offline" }); 
+  }
 });
 
-// --- SUBMIT REPORT ROUTE (Original) ---
+// --- SUBMIT REPORT ROUTE (UPDATED WITH NUMBER PLATES) ---
 app.post("/submit-report", async (req, res) => {
     try {
-        const { title, category, severity, description, location, image, userEmail, dateOfOffense, timeOfOffense, authorityName } = req.body;
+        const { 
+            title, category, severity, description, location, image, 
+            userEmail, dateOfOffense, timeOfOffense, authorityName,
+            number_plates 
+        } = req.body;
         
         if (!userEmail) return res.status(401).json({ error: "Unauthorized: No User ID" });
 
@@ -586,6 +796,7 @@ app.post("/submit-report", async (req, res) => {
                 description, 
                 location, 
                 image,
+                number_plates: number_plates || [],
                 status: "Forwarded",
                 forwardedTo: officialAuthority,
                 offenseDate: dateOfOffense || new Date().toLocaleDateString('en-IN'),
@@ -593,11 +804,13 @@ app.post("/submit-report", async (req, res) => {
             });
             await issue.save();
 
-            // 📨 TRIGGER EMAIL
             sendOfficialAlert(issue, officialAuthority);
 
             console.log(`📨 OFFICIAL DISPATCH: Report #${issue._id}`);
             console.log(`   ► ROUTED TO: ${officialAuthority}`);
+            if (number_plates && number_plates.length > 0) {
+                console.log(`   ► PLATES: ${number_plates.map(p => p.plate_number).join(', ')}`);
+            }
 
             res.json({ success: true, report: issue, forwardedTo: officialAuthority });
         } else { 
@@ -608,13 +821,7 @@ app.post("/submit-report", async (req, res) => {
     }
 });
 
-// --- PADDED SPACE TO MAINTAIN LINE COUNT ---
-// This section previously contained the /report-industry logic.
-// It has been removed to disable the tiered warning system.
-// The code will now fall back to the standard submit-report logic
-// for all industrial and environmental violations.
-// --- END PADDED SPACE ---
-
+// --- GET USER REPORTS ---
 app.get("/my-reports", async (req, res) => {
     try {
         const { userEmail } = req.query;
@@ -623,16 +830,20 @@ app.get("/my-reports", async (req, res) => {
         if(isCloudConnected) { 
             const reports = await IssueReport.find({ userEmail }).sort({ date: -1 }); 
             res.json(reports); 
-        } 
-        else { res.json([]); }
+        } else { 
+          res.json([]); 
+        }
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post("/api/legal/analyze", async (req, res) => {
+// --- The updated route ---
+app.post("/api/legal/analyze", upload.single('file'), async (req, res) => {
   try {
     const { description, userId, language } = req.body;
+    const file = req.file;
+
     const finalUserId = userId?.trim() ? userId : "Guest";
 
     const languageMap = {
@@ -644,34 +855,53 @@ app.post("/api/legal/analyze", async (req, res) => {
     };
     const targetLang = languageMap[language] || 'English';
 
-    const prompt = `You are an Indian Traffic and Environmental Legal Expert. 
-    Analyze: "${description}". 
+    let combinedDescription = description || "";
+    let imageBase64 = null;
+
+    if (file) {
+      if (file.mimetype.startsWith('image/')) {
+        imageBase64 = file.buffer.toString('base64');
+        combinedDescription += "\n\n[Image attached for visual analysis]";
+      } else if (file.mimetype === 'application/pdf') {
+        const pdfData = await pdfParse(file.buffer);
+        combinedDescription += `\n\n--- PDF Content ---\n${pdfData.text}\n--- End PDF ---`;
+      } else {
+        return res.status(400).json({ error: "Unsupported file type. Only images (JPEG, PNG) and PDFs are allowed." });
+      }
+    }
+
+    const prompt = `You are an Indian Traffic and Environmental Legal Expert with access to current laws and fines. 
+    Analyze: "${combinedDescription}". 
+    
+    Provide CURRENT penalty amounts based on latest amendments (including post-December 2023 updates).
+    
     CRITICAL: Provide the entire response strictly in formal ${targetLang}.
     Return STRICT JSON: 
     { 
-      "penalty": "Fine/penalty summary.", 
-      "law": "Specific Section and Act.", 
+      "penalty": "Fine/penalty summary with CURRENT amount and legal reference.", 
+      "law": "Specific Section and Act with amendment date.", 
       "resolution": "Step 1; Step 2; Step 3", 
       "appealDraft": "Detailed formal appeal body for a legal document." 
     }`;
 
-    const text = await callGeminiAI(prompt);
-    
-    // Robust JSON extraction
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Invalid AI response format");
-    const aiResponse = JSON.parse(jsonMatch[0]);
+    const text = await callGeminiAI(prompt, imageBase64, 'image/jpeg');
+    const aiResponse = safeJSONParse(text, {
+      penalty: "Unable to determine current penalty - consult local authorities",
+      law: "Consult local authorities for latest amendments",
+      resolution: "Contact legal advisor",
+      appealDraft: "Please consult a lawyer"
+    });
 
     const newRecord = new LegalAdvisor({
       userId: finalUserId,
-      description,
+      description: combinedDescription,
       language: targetLang,
       analysis: aiResponse
     });
 
     if (isCloudConnected) {
-        await newRecord.save();
-        console.log(`Record saved for ${finalUserId}`);
+      await newRecord.save();
+      console.log(`Record saved for ${finalUserId}`);
     }
 
     res.json(aiResponse);
@@ -682,10 +912,10 @@ app.post("/api/legal/analyze", async (req, res) => {
   }
 });
 
+// --- GET LEGAL HISTORY ---
 app.get("/api/legal/history/:userId", async (req, res) => {
   try {
     if (!isCloudConnected) return res.json([]);
-    // Fetch history for the specific user
     const history = await LegalAdvisor.find({ userId: req.params.userId }).sort({ createdAt: -1 }).limit(5);
     res.json(history);
   } catch (error) { 
@@ -693,15 +923,195 @@ app.get("/api/legal/history/:userId", async (req, res) => {
   }
 });
 
+// =========================================================
+// 10. MAIN ANALYZE ENDPOINT (FIXED HELMET LOGIC)
+// =========================================================
 app.post("/analyze", async (req, res) => {
   try {
-    const { base64, prompt, context } = req.body;
-    const parts = base64.split(",");
-    const cleanBase64 = parts.length > 1 ? parts[1] : parts[0];
+    const { base64 } = req.body;
+
+    console.log("📥 Image received:", base64 ? "YES" : "NO");
+
+    if (!base64) {
+      return res.status(400).json({ error: "No image received" });
+    }
+
+    // Clean base64 and save image
+    const cleanBase64 = base64.replace(/^data:image\/\w+;base64,/, "");
+    const imagePath = path.join(__dirname, "temp.jpg");
     
-    const analysisData = await analyzeTrafficWithAI(cleanBase64, prompt || context);
-    res.json(analysisData);
-  } catch (err) { res.status(500).json({ violation: false, title: "Error", description: err.message }); }
+    fs.writeFileSync(imagePath, Buffer.from(cleanBase64, "base64"));
+    console.log("✅ Image saved!");
+
+    // STEP 1: Classify if traffic-related using Gemini
+    console.log("🔍 Classifying image type...");
+    const classificationText = await callGeminiAI(TRAFFIC_CLASSIFICATION_PROMPT, cleanBase64);
+    const classification = safeJSONParse(classificationText, { 
+      isTraffic: false, 
+      confidence: "Low", 
+      reason: "Parse failed" 
+    });
+    
+    console.log("📊 Classification:", classification);
+
+    let violations = [];
+    let helmetResult = null;
+    let plateResult = { plates_found: 0, plates: [] };
+    let vehicleType = "unknown";
+
+    // STEP 2: Run number plate detection
+    console.log("🔍 Running number plate detection...");
+    try {
+      plateResult = await detectNumberPlate(imagePath);
+    } catch (plateError) {
+      console.error("Number plate detection failed:", plateError);
+      plateResult = { plates_found: 0, plates: [] };
+    }
+
+    // STEP 3: Only run YOLO for traffic images
+    if (classification.isTraffic === true) {
+      console.log("🚦 Traffic image detected - Running YOLO for helmet detection");
+      helmetResult = await detectHelmet(imagePath);
+      
+      // Process YOLO result - FIXED LOGIC
+      if (helmetResult && !helmetResult.includes("error")) {
+        console.log("📊 Helmet detection result:", helmetResult);
+        
+        // ONLY add violation if explicitly "no_helmet"
+        if (helmetResult === "no_helmet") {
+          console.log("🤖 Getting current helmet fine from Gemini...");
+          const helmetFinePrompt = `What is the current fine for "No Helmet" violation for two-wheeler riders in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
+          const helmetFineText = await callGeminiAI(helmetFinePrompt);
+          const helmetFineData = safeJSONParse(helmetFineText, { fine: 500, law: "Section 129 MV Act", reference: "Standard fine" });
+          
+          violations.push({
+            category: "Traffic Violation",
+            title: "No Helmet",
+            description: "Rider is not wearing a helmet",
+            law: helmetFineData.law || "Section 129/194D MV Act",
+            fineAmount: helmetFineData.fine || 500,
+            fineReference: helmetFineData.reference || "Kerala MV Rules",
+            severity: "High"
+          });
+          
+          console.log(`💰 Helmet violation fine: ₹${helmetFineData.fine || 500}`);
+        } else if (helmetResult === "with_helmet") {
+          console.log("✅ Helmet detected - No violation added");
+        } else {
+          console.log("⚠️ Unknown helmet status - No violation added");
+        }
+      }
+    } else {
+      console.log("🌍 Non-traffic image - Skipping YOLO completely");
+    }
+
+    // STEP 4: Get ALL violations including fines from Gemini
+    console.log("🤖 Checking for violations with REAL-TIME fines...");
+    const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
+    const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
+
+    // Update vehicle type from Gemini
+    if (geminiResult.vehicleType) {
+      vehicleType = geminiResult.vehicleType;
+    }
+
+    // ---------- NEW: FILTER OUT UNWANTED VIOLATIONS FROM GEMINI ----------
+    // Remove helmet violations from Gemini (so only YOLO's "No Helmet" remains)
+    if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+      geminiResult.violations = geminiResult.violations.filter(v => {
+        const title = v.title.toLowerCase();
+        const isHelmet = title.includes('helmet') && (title.includes('no') || title.includes('without'));
+        return !isHelmet;
+      });
+    }
+
+    // Remove other unwanted fines (HSRP, footwear, registration plate, etc.)
+    const excludedKeywords = ['footwear', 'hsrp', 'registration plate', 'non-compliance'];
+    if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+      geminiResult.violations = geminiResult.violations.filter(v => {
+        const title = v.title.toLowerCase();
+        return !excludedKeywords.some(keyword => title.includes(keyword));
+      });
+    }
+    // --------------------------------------------------------------
+
+    // STEP 5: Merge violations (avoid duplicates)
+    if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+      geminiResult.violations.forEach(geminiViolation => {
+        // Check if this violation is already added (case-insensitive)
+        const isDuplicate = violations.some(v => 
+          v.title.toLowerCase() === geminiViolation.title.toLowerCase()
+        );
+        
+        if (!isDuplicate) {
+          violations.push({
+            category: geminiViolation.category || "Traffic Violation",
+            title: geminiViolation.title,
+            description: geminiViolation.description,
+            law: geminiViolation.law,
+            fineAmount: geminiViolation.fineAmount || 1000,
+            fineReference: geminiViolation.fineReference || "Current Kerala regulations",
+            severity: geminiViolation.severity || "Medium"
+          });
+          
+          console.log(`💰 Fine for "${geminiViolation.title}": ₹${geminiViolation.fineAmount || 1000}`);
+        }
+      });
+    }
+
+    // STEP 6: Calculate total fine
+    const totalFine = violations.reduce((sum, v) => sum + (v.fineAmount || 0), 0);
+
+    // Clean up temp file
+    try {
+      fs.unlinkSync(imagePath);
+      console.log("🗑️ Temp file deleted");
+    } catch (e) {
+      console.log("⚠️ Could not delete temp file");
+    }
+
+    // STEP 7: Send final response
+    res.json({
+      violationsFound: violations.length > 0,
+      violations: violations.map(v => ({
+        category: v.category,
+        title: v.title,
+        description: v.description,
+        law: v.law,
+        fineAmount: `₹${v.fineAmount}`,
+        fineReference: v.fineReference,
+        severity: v.severity
+      })),
+      vehicleType: vehicleType,
+      number_plates: plateResult.plates || [],
+      plates_found: plateResult.plates_found || 0,
+      totalEstimatedFine: `₹${totalFine}`,
+      classification: {
+        isTraffic: classification.isTraffic,
+        confidence: classification.confidence
+      },
+      fineDisclaimer: "Fines are based on current Kerala regulations as known to Gemini AI."
+    });
+
+  } catch (err) {
+    console.error("❌ ANALYZE ERROR:", err);
+    
+    try {
+      fs.unlinkSync(path.join(__dirname, "temp.jpg"));
+    } catch (e) {}
+
+    res.status(500).json({ 
+      error: "Analysis failed",
+      violationsFound: false,
+      violations: [],
+      number_plates: [],
+      plates_found: 0,
+      totalEstimatedFine: "₹0"
+    });
+  }
 });
 
-app.listen(5000, () => console.log("Backend Running on Port 5000"));
+// =========================================================
+// 11. START SERVER
+// =========================================================
+app.listen(5000, () => console.log("🚀 Backend Running on Port 5000"));

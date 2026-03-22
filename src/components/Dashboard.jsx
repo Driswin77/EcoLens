@@ -162,6 +162,7 @@ export default function Dashboard({ userName }) {
             fetchAqi(latitude, longitude);
             // Pass the exact search query to fetchRealLaws
             fetchRealLaws(searchQuery);
+            fetchWeather(latitude, longitude);
 
         } else {
             setPlace("Location not found");
@@ -281,75 +282,58 @@ export default function Dashboard({ userName }) {
     <Box sx={{ width: "100%", pb: 4, mt: -2, px: 4, background: "linear-gradient(135deg, #145A40, #1B4332)" }}>
       {/* ================= HEADER ================= */}
       <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems="center" spacing={2} sx={{ py: 3 }}>
-       <Box sx={{ width: "100%", maxWidth: 600, pb: 0 }}>
-  <Paper
+       <Box sx={{ width: "100%", maxWidth: 600 ,pb: 0, top: -30, left: 5, position: "relative" }}>
+<Paper
   elevation={0}
   sx={{
     mb: 3,
-    width: "100%",
-    height: 100,
-    borderRadius: "20px",
-    background: "rgba(255, 255, 255, 0.08)",
-    backdropFilter: "blur(10px)",
-    border: "1px solid rgba(255,255,255,0.1)",
+    width: { xs: "100%", md: 380 },
+    borderRadius: "18px",
+    background: "rgba(255,255,255,0.08)",
+    backdropFilter: "blur(12px)",
+    border: "1px solid rgba(255,255,255,0.08)",
     color: "#E8F5E9",
-    boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
-    p: 2
+    boxShadow: "0 8px 20px rgba(0,0,0,0.18)",
+    px: 3,
+    py: 1,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center"
   }}
 >
+  {/* LEFT SIDE */}
+  <Box >
     <Typography
       variant="h5"
       fontWeight="800"
-      sx={{ color: "#FFFFFF", letterSpacing: "-0.5px" }}
+      sx={{ color: "#FFFFFF", letterSpacing: "-0.3px" }}
     >
-      {getGreeting()}, {userName || "Citizen"}
+      {getGreeting()}, {userName || "Citizen"} 
     </Typography>
 
-    <Stack direction="row" spacing={1} alignItems="center" mt={0.5}>
+    <Stack direction="row" spacing={1} alignItems="center" mt={0.3}>
       <Box
         sx={{
-          width: 10,
-          height: 10,
+          width: 8,
+          height: 8,
           borderRadius: "50%",
-          bgcolor: "#2ECC71",              // eco green
-          boxShadow: "0 0 10px #2ECC71"
+          bgcolor: "#2ECC71",
+          boxShadow: "0 0 8px #2ECC71"
         }}
       />
 
       <Typography
         variant="body2"
         fontWeight="500"
-        sx={{ color: "#FFFFFF" }}          // softer dark text
+        sx={{ color: "#B7E4C7" }}
       >
         Live Regional Intelligence Active
       </Typography>
-
-     <Box
-  sx={{
-    textAlign: "center",
-    position: "absolute",
-    top: 10,
-    right: 20,
-    bgcolor: "rgba(255,255,255,0.08)",
-    borderRadius: "12px",
-    px: 2,
-    py: 1,
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 6px 16px rgba(0,0,0,0.25)"
-  }}
->
-  <Typography variant="h5">
-    {getWeatherIcon(weatherCode)} {temperature ? `${temperature}°C` : "--"}
-  </Typography>
-
-  <Typography variant="caption" sx={{ color: "#B7E4C7" }}>
-    Local Weather
-  </Typography>
-</Box>
-  
-
     </Stack>
-  </Paper>
+  </Box>
+
+
+</Paper>
 </Box>
 
       <Paper
@@ -357,14 +341,14 @@ export default function Dashboard({ userName }) {
   sx={{
     position: "absolute",
     top: 10,
-    right:20,
+    right:25,
 
     display: "flex",
     alignItems: "center",
-    px: 2,
+    px: 1,
     py: 1,
     borderRadius: "16px",
-    width: { xs: "100%", md: 250 },
+    width: { xs: "100%", md: 280 },
 
     background: "rgba(36, 70, 62, 0.85)",
     backdropFilter: "blur(10px)",
@@ -392,6 +376,10 @@ export default function Dashboard({ userName }) {
           {loading && <CircularProgress size={18} sx={{ mr: 1 }} />}
           <Divider orientation="vertical" flexItem sx={{ mx: 1, height: 30 , borderColor: "rgba(255,255,255,0.25)" }} />
 
+        <Typography variant="h7">
+         {getWeatherIcon(weatherCode)} {temperature ? `${temperature}°C` : "--"}
+        </Typography>
+
           <IconButton 
             size="small" 
             onClick={detectLocation} 
@@ -410,7 +398,7 @@ export default function Dashboard({ userName }) {
           <Card
             elevation={0}
             sx={{
-              p: 3, borderRadius: "24px",mt: -4,
+              p: 3, borderRadius: "24px",mt: -7,
               background: "linear-gradient(135deg, #1B4332, #2D6A4F)",
               color: "white", minHeight: 450, display: "flex", flexDirection: "column",
               boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1)", position: "relative", overflow: "hidden"
