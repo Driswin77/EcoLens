@@ -583,7 +583,7 @@ cron.schedule('0 9 * * *', async () => {
 // =========================================================
 async function detectHelmet(imagePath) {
   try {
-    console.log("🚀 Running YOLO for helmet detection...");
+    console.log(" Running YOLO for helmet detection...");
     
     const { stdout, stderr } = await execAsync(`python detect.py "${imagePath}"`);
     
@@ -608,12 +608,25 @@ async function detectHelmet(imagePath) {
   }
 }
 
+// YOLO SEAT BELT DETECTION (NEW)
+async function detectSeatbelt(imagePath) {
+  try {
+    const { stdout, stderr } = await execAsync(`python detect_seatbelt.py "${imagePath}"`);
+    if (stderr) console.warn("Seatbelt detection stderr:", stderr);
+    const result = JSON.parse(stdout.trim());
+    return result; // { seatbelt_worn: true/false/null, confidence: 0.xx }
+  } catch (error) {
+    console.error("Seatbelt detection error:", error);
+    return { seatbelt_worn: null, confidence: 0 };
+  }
+}
+
 // =========================================================
 // 7. NUMBER PLATE DETECTION (IMPROVED)
 // =========================================================
 async function detectNumberPlate(imagePath) {
   try {
-    console.log("🚗 Running number plate detection...");
+    console.log(" Running number plate detection...");
     
     const { stdout, stderr } = await execAsync(`python detect_plate.py "${imagePath}"`);
     
@@ -642,7 +655,7 @@ async function detectNumberPlate(imagePath) {
 // =========================================================
 async function detectVehicleType(imagePath) {
   try {
-    console.log("🚗 Running vehicle type detection...");
+    console.log(" Running vehicle type detection...");
     
     const { stdout, stderr } = await execAsync(`python detect_vehicle.py "${imagePath}"`);
     
@@ -924,24 +937,35 @@ app.get("/api/legal/history/:userId", async (req, res) => {
 });
 
 // =========================================================
-// 10. MAIN ANALYZE ENDPOINT (FIXED HELMET LOGIC)
+// 10. MAIN ANALYZE ENDPOINT (Seatbelt YOLO with dynamic fine)
 // =========================================================
 app.post("/analyze", async (req, res) => {
   try {
     const { base64 } = req.body;
 
-    console.log("📥 Image received:", base64 ? "YES" : "NO");
+    if (!base64) return res.status(400).json({ error: "No image received" });
 
-    if (!base64) {
-      return res.status(400).json({ error: "No image received" });
-    }
-
-    // Clean base64 and save image
+    // Extract MIME type and save as PNG (lossless)
     const cleanBase64 = base64.replace(/^data:image\/\w+;base64,/, "");
-    const imagePath = path.join(__dirname, "temp.jpg");
-    
+    const imagePath = path.join(__dirname, "temp.png");
     fs.writeFileSync(imagePath, Buffer.from(cleanBase64, "base64"));
-    console.log("✅ Image saved!");
+    console.log("✅ Image saved as PNG");
+
+    // Short delay to ensure file is flushed (Windows)
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Verify file
+    try {
+      const stats = fs.statSync(imagePath);
+      if (stats.size === 0) {
+        console.error("❌ Saved image is empty!");
+        return res.status(500).json({ error: "Image file is empty" });
+      }
+      console.log(`📁 Image size: ${stats.size} bytes`);
+    } catch (err) {
+      console.error("❌ Error checking file:", err);
+      return res.status(500).json({ error: "Failed to write image" });
+    }
 
     // STEP 1: Classify if traffic-related using Gemini
     console.log("🔍 Classifying image type...");
@@ -951,15 +975,13 @@ app.post("/analyze", async (req, res) => {
       confidence: "Low", 
       reason: "Parse failed" 
     });
-    
     console.log("📊 Classification:", classification);
 
     let violations = [];
-    let helmetResult = null;
     let plateResult = { plates_found: 0, plates: [] };
     let vehicleType = "unknown";
 
-    // STEP 2: Run number plate detection
+    // STEP 2: Number plate detection
     console.log("🔍 Running number plate detection...");
     try {
       plateResult = await detectNumberPlate(imagePath);
@@ -968,81 +990,106 @@ app.post("/analyze", async (req, res) => {
       plateResult = { plates_found: 0, plates: [] };
     }
 
-    // STEP 3: Only run YOLO for traffic images
+    // STEP 3: If traffic, run Gemini to get vehicle type and violations (but we'll filter later)
     if (classification.isTraffic === true) {
-      console.log("🚦 Traffic image detected - Running YOLO for helmet detection");
-      helmetResult = await detectHelmet(imagePath);
-      
-      // Process YOLO result - FIXED LOGIC
-      if (helmetResult && !helmetResult.includes("error")) {
-        console.log("📊 Helmet detection result:", helmetResult);
-        
-        // ONLY add violation if explicitly "no_helmet"
+      console.log("🚦 Traffic image detected – getting vehicle type and violations from Gemini...");
+      const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
+      const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
+
+      // Update vehicle type from Gemini
+      vehicleType = geminiResult.vehicleType || "unknown";
+      console.log("🚗 Vehicle type (Gemini):", vehicleType);
+
+      // Determine vehicle type
+      const isTwoWheeler = ['motorcycle', 'scooter', 'bike', 'two-wheeler', 'two_wheeler'].some(t => vehicleType.toLowerCase().includes(t));
+      const isFourWheeler = ['car', 'truck', 'bus', 'van', 'suv', 'sedan', 'hatchback'].some(t => vehicleType.toLowerCase().includes(t));
+
+      let seatbeltViolationAdded = false; // flag for filtering Gemini
+
+      // Run YOLO based on vehicle type
+      if (isTwoWheeler) {
+        console.log("🛵 Two‑wheeler – running helmet detection");
+        const helmetResult = await detectHelmet(imagePath);
         if (helmetResult === "no_helmet") {
-          console.log("🤖 Getting current helmet fine from Gemini...");
+          // Fetch helmet fine dynamically
           const helmetFinePrompt = `What is the current fine for "No Helmet" violation for two-wheeler riders in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
           const helmetFineText = await callGeminiAI(helmetFinePrompt);
           const helmetFineData = safeJSONParse(helmetFineText, { fine: 500, law: "Section 129 MV Act", reference: "Standard fine" });
-          
           violations.push({
             category: "Traffic Violation",
             title: "No Helmet",
             description: "Rider is not wearing a helmet",
-            law: helmetFineData.law || "Section 129/194D MV Act",
-            fineAmount: helmetFineData.fine || 500,
-            fineReference: helmetFineData.reference || "Kerala MV Rules",
+            law: helmetFineData.law,
+            fineAmount: helmetFineData.fine,
+            fineReference: helmetFineData.reference,
             severity: "High"
           });
-          
-          console.log(`💰 Helmet violation fine: ₹${helmetFineData.fine || 500}`);
+          console.log(`💰 Helmet violation added: ₹${helmetFineData.fine}`);
         } else if (helmetResult === "with_helmet") {
-          console.log("✅ Helmet detected - No violation added");
+          console.log("✅ Helmet detected – no violation");
         } else {
-          console.log("⚠️ Unknown helmet status - No violation added");
+          console.log("⚠️ Helmet detection unclear – skipping");
+        }
+      } 
+      else if (isFourWheeler) {
+        console.log("🚗 Four‑wheeler – running seatbelt detection");
+        const seatbeltResult = await detectSeatbelt(imagePath);
+        if (seatbeltResult.seatbelt_worn === false) {
+          // Fetch seatbelt fine dynamically
+          console.log("🤖 Getting current seatbelt fine from Gemini...");
+          const seatbeltFinePrompt = `What is the current fine for "No Seatbelt" violation for four-wheeler drivers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
+          const seatbeltFineText = await callGeminiAI(seatbeltFinePrompt);
+          const seatbeltFineData = safeJSONParse(seatbeltFineText, { fine: 1000, law: "Section 138(3) MV Act", reference: "Standard fine" });
+          violations.push({
+            category: "Traffic Violation",
+            title: "No Seatbelt",
+            description: "Driver not wearing seatbelt",
+            law: seatbeltFineData.law,
+            fineAmount: seatbeltFineData.fine,
+            fineReference: seatbeltFineData.reference,
+            severity: "Medium"
+          });
+          console.log(`💰 Seatbelt violation added: ₹${seatbeltFineData.fine}`);
+          seatbeltViolationAdded = true;
+        } else if (seatbeltResult.seatbelt_worn === true) {
+          console.log("✅ Seatbelt detected – no violation");
+        } else {
+          console.log("⚠️ Seatbelt detection unclear – skipping");
         }
       }
-    } else {
-      console.log("🌍 Non-traffic image - Skipping YOLO completely");
-    }
+      else {
+        console.log("⚠️ Unknown vehicle type – skipping YOLO detections");
+      }
 
-    // STEP 4: Get ALL violations including fines from Gemini
-    console.log("🤖 Checking for violations with REAL-TIME fines...");
-    const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
-    const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
+      // Filter Gemini violations: remove helmet always, remove seatbelt only if YOLO added one
+      if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+        geminiResult.violations = geminiResult.violations.filter(v => {
+          const title = v.title.toLowerCase();
+          // Helmet: always remove
+          const isHelmet = title.includes('helmet') && (title.includes('no') || title.includes('without'));
+          if (isHelmet) return false;
+          // Seatbelt: remove only if YOLO added a violation
+          const isSeatbelt = title.includes('seatbelt') && (
+            title.includes('no') || title.includes('not') || title.includes('without') ||
+            title.includes('failure') || title.includes('missing') || title.includes('unbuckled')
+          );
+          if (isSeatbelt && seatbeltViolationAdded) return false;
+          return true;
+        });
+      }
 
-    // Update vehicle type from Gemini
-    if (geminiResult.vehicleType) {
-      vehicleType = geminiResult.vehicleType;
-    }
+      // Remove other unwanted fines (HSRP, footwear, etc.)
+      const excludedKeywords = ['footwear', 'hsrp', 'registration plate', 'non-compliance'];
+      if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+        geminiResult.violations = geminiResult.violations.filter(v => {
+          const title = v.title.toLowerCase();
+          return !excludedKeywords.some(keyword => title.includes(keyword));
+        });
+      }
 
-    // ---------- NEW: FILTER OUT UNWANTED VIOLATIONS FROM GEMINI ----------
-    // Remove helmet violations from Gemini (so only YOLO's "No Helmet" remains)
-    if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
-      geminiResult.violations = geminiResult.violations.filter(v => {
-        const title = v.title.toLowerCase();
-        const isHelmet = title.includes('helmet') && (title.includes('no') || title.includes('without'));
-        return !isHelmet;
-      });
-    }
-
-    // Remove other unwanted fines (HSRP, footwear, registration plate, etc.)
-    const excludedKeywords = ['footwear', 'hsrp', 'registration plate', 'non-compliance'];
-    if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
-      geminiResult.violations = geminiResult.violations.filter(v => {
-        const title = v.title.toLowerCase();
-        return !excludedKeywords.some(keyword => title.includes(keyword));
-      });
-    }
-    // --------------------------------------------------------------
-
-    // STEP 5: Merge violations (avoid duplicates)
-    if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+      // Merge with YOLO violations
       geminiResult.violations.forEach(geminiViolation => {
-        // Check if this violation is already added (case-insensitive)
-        const isDuplicate = violations.some(v => 
-          v.title.toLowerCase() === geminiViolation.title.toLowerCase()
-        );
-        
+        const isDuplicate = violations.some(v => v.title.toLowerCase() === geminiViolation.title.toLowerCase());
         if (!isDuplicate) {
           violations.push({
             category: geminiViolation.category || "Traffic Violation",
@@ -1053,24 +1100,46 @@ app.post("/analyze", async (req, res) => {
             fineReference: geminiViolation.fineReference || "Current Kerala regulations",
             severity: geminiViolation.severity || "Medium"
           });
-          
           console.log(`💰 Fine for "${geminiViolation.title}": ₹${geminiViolation.fineAmount || 1000}`);
         }
       });
+
+    } else {
+      // Non‑traffic image: only Gemini violations (no YOLO)
+      console.log("🌍 Non-traffic image – running Gemini for violations...");
+      const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
+      const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
+
+      // Filter out unwanted keywords
+      const excludedKeywords = ['footwear', 'hsrp', 'registration plate', 'non-compliance'];
+      if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
+        geminiResult.violations = geminiResult.violations.filter(v => {
+          const title = v.title.toLowerCase();
+          return !excludedKeywords.some(keyword => title.includes(keyword));
+        });
+      }
+
+      violations = geminiResult.violations.map(v => ({
+        category: v.category || "Environmental Violation",
+        title: v.title,
+        description: v.description,
+        law: v.law,
+        fineAmount: v.fineAmount || 1000,
+        fineReference: v.fineReference || "Current Kerala regulations",
+        severity: v.severity || "Medium"
+      }));
     }
 
-    // STEP 6: Calculate total fine
+    // Calculate total fine
     const totalFine = violations.reduce((sum, v) => sum + (v.fineAmount || 0), 0);
 
     // Clean up temp file
     try {
       fs.unlinkSync(imagePath);
       console.log("🗑️ Temp file deleted");
-    } catch (e) {
-      console.log("⚠️ Could not delete temp file");
-    }
+    } catch (e) { /* ignore */ }
 
-    // STEP 7: Send final response
+    // Send response
     res.json({
       violationsFound: violations.length > 0,
       violations: violations.map(v => ({
@@ -1095,11 +1164,7 @@ app.post("/analyze", async (req, res) => {
 
   } catch (err) {
     console.error("❌ ANALYZE ERROR:", err);
-    
-    try {
-      fs.unlinkSync(path.join(__dirname, "temp.jpg"));
-    } catch (e) {}
-
+    try { fs.unlinkSync(path.join(__dirname, "temp.png")); } catch (e) {}
     res.status(500).json({ 
       error: "Analysis failed",
       violationsFound: false,
