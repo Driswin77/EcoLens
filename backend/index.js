@@ -365,18 +365,16 @@ CRITICAL: Return ONLY valid JSON in this exact format:
   "confidence": "High/Medium/Low",
   "reason": "Brief explanation of classification"
 }`;
-
-// Enhanced Violation Detection Prompt with REAL-TIME fine calculation
 const VIOLATION_DETECTION_PROMPT = `You are an AI enforcement officer for India with REAL-TIME access to current laws and fines. Analyze this image and identify ALL violations present.
 
 CRITICAL INSTRUCTIONS:
-1. First, identify the type of vehicle(s) present (car, motorcycle, truck, bus, bicycle, etc.)
-2. For motorcycle/scooter, check for helmet violations
-3. For cars and other four-wheelers, DO NOT report helmet violations
-4. For EVERY violation detected, determine the CURRENT fine amount based on LATEST laws
-5. Consider recent amendments and notifications (including December 2023 updates)
-6. Fines should be specific to Kerala state regulations
-7. Include the legal source for each fine
+1. DO NOT report helmet violations – they are handled separately.
+2. DO NOT report seatbelt violations – they are handled separately.
+3. DO NOT report triple riding violations – they are handled separately.
+4. For EVERY violation detected, determine the CURRENT fine amount based on LATEST laws.
+5. Consider recent amendments and notifications (including December 2023 updates).
+6. Fines should be specific to Kerala state regulations.
+7. Include the legal source for each fine.
 
 FINE REFERENCE GUIDE:
 - Waste dumping spot fines: ₹5,000 (Kerala Municipality Amendment Dec 2023)
@@ -384,13 +382,11 @@ FINE REFERENCE GUIDE:
 - Industrial waste: ₹50,000 - ₹5,00,000 (Water/Environment Protection Act)
 - Traffic violations: Refer to Motor Vehicles (Kerala Amendment) Act, 2023
 - Burning waste: ₹10,000 (NGT guidelines)
-- No helmet for two-wheeler: ₹500-1000 (Section 129 MV Act)
 - HSRP violation: ₹5,000-10,000 (Central Motor Vehicles Rules)
 
 Return STRICT JSON in this format:
 {
   "violationsFound": true/false,
-  "vehicleType": "car/motorcycle/truck/bus/auto/unknown",
   "violations": [
     {
       "category": "Traffic Violation" or "Environmental Violation" or "Civic Issue",
@@ -404,7 +400,7 @@ Return STRICT JSON in this format:
   ]
 }
 
-If no violations found, return: { "violationsFound": false, "vehicleType": "unknown", "violations": [] }`;
+If no violations found, return: { "violationsFound": false, "violations": [] }`;
 
 // REAL-TIME RULES GENERATOR
 async function getLocalRulesWithAI(location) {
@@ -677,6 +673,34 @@ async function detectVehicleType(imagePath) {
   }
 }
 
+//Triple riding
+
+async function detectTripleRiding(imagePath) {
+  try {
+    const { stdout, stderr } = await execAsync(`python detect_triple_riding.py "${imagePath}"`);
+    if (stderr) console.warn("Triple riding detection stderr:", stderr);
+    const result = JSON.parse(stdout.trim());
+    return result; // { triple_count, confidence }
+  } catch (error) {
+    console.error("Triple riding detection error:", error);
+    return { triple_count: 0, confidence: 0 };
+  }
+}
+
+//classify the violation
+
+async function detectImageType(imagePath) {
+  try {
+    const { stdout, stderr } = await execAsync(`python detect_vtype.py "${imagePath}"`);
+    if (stderr) console.warn("Image type detection stderr:", stderr);
+    const result = JSON.parse(stdout.trim());
+    return result; // { class, confidence }
+  } catch (error) {
+    console.error("Image type detection error:", error);
+    return { class: 'unknown', confidence: 0 };
+  }
+}
+
 // =========================================================
 // 9. API ROUTES
 // =========================================================
@@ -937,7 +961,7 @@ app.get("/api/legal/history/:userId", async (req, res) => {
 });
 
 // =========================================================
-// 10. MAIN ANALYZE ENDPOINT (Seatbelt YOLO with dynamic fine)
+// 10. MAIN ANALYZE ENDPOINT (Local vehicle type + all YOLO detectors)
 // =========================================================
 app.post("/analyze", async (req, res) => {
   try {
@@ -945,13 +969,12 @@ app.post("/analyze", async (req, res) => {
 
     if (!base64) return res.status(400).json({ error: "No image received" });
 
-    // Extract MIME type and save as PNG (lossless)
+    // Save as PNG (lossless)
     const cleanBase64 = base64.replace(/^data:image\/\w+;base64,/, "");
     const imagePath = path.join(__dirname, "temp.png");
     fs.writeFileSync(imagePath, Buffer.from(cleanBase64, "base64"));
     console.log("✅ Image saved as PNG");
 
-    // Short delay to ensure file is flushed (Windows)
     await new Promise(resolve => setTimeout(resolve, 100));
 
     // Verify file
@@ -981,37 +1004,37 @@ app.post("/analyze", async (req, res) => {
     let plateResult = { plates_found: 0, plates: [] };
     let vehicleType = "unknown";
 
-    // STEP 2: Number plate detection
-    console.log("🔍 Running number plate detection...");
-    try {
-      plateResult = await detectNumberPlate(imagePath);
-    } catch (plateError) {
-      console.error("Number plate detection failed:", plateError);
-      plateResult = { plates_found: 0, plates: [] };
-    }
-
-    // STEP 3: If traffic, run Gemini to get vehicle type and violations (but we'll filter later)
+    // STEP 2: If traffic, run detection pipelines
     if (classification.isTraffic === true) {
-      console.log("🚦 Traffic image detected – getting vehicle type and violations from Gemini...");
-      const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
-      const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
+      console.log("🚦 Traffic image detected – running local vehicle type detection...");
 
-      // Update vehicle type from Gemini
-      vehicleType = geminiResult.vehicleType || "unknown";
-      console.log("🚗 Vehicle type (Gemini):", vehicleType);
+      // Get vehicle type from local YOLO model
+      const vehicle = await detectVehicleType(imagePath);
+      vehicleType = vehicle.vehicle_type;
+      console.log("🚗 Vehicle type (local):", vehicleType);
 
-      // Determine vehicle type
-      const isTwoWheeler = ['motorcycle', 'scooter', 'bike', 'two-wheeler', 'two_wheeler'].some(t => vehicleType.toLowerCase().includes(t));
-      const isFourWheeler = ['car', 'truck', 'bus', 'van', 'suv', 'sedan', 'hatchback'].some(t => vehicleType.toLowerCase().includes(t));
+      // Run number plate detection (only for traffic)
+      console.log("🔍 Running number plate detection...");
+      try {
+        plateResult = await detectNumberPlate(imagePath);
+      } catch (plateError) {
+        console.error("Number plate detection failed:", plateError);
+        plateResult = { plates_found: 0, plates: [] };
+      }
 
-      let seatbeltViolationAdded = false; // flag for filtering Gemini
+      // Determine vehicle category
+      const isTwoWheeler = ['motorcycle', 'scooter', 'bike', 'two-wheeler', 'two_wheeler', 'motor cycle'].some(t => vehicleType.toLowerCase().includes(t));
+      const isFourWheeler = ['car', 'truck', 'bus', 'van', 'suv', 'sedan', 'hatchback', 'auto'].some(t => vehicleType.toLowerCase().includes(t));
 
-      // Run YOLO based on vehicle type
+      let helmetViolationAdded = false;
+      let seatbeltViolationAdded = false;
+      let tripleViolationAdded = false;
+
+      // Run appropriate YOLO detectors based on vehicle type
       if (isTwoWheeler) {
         console.log("🛵 Two‑wheeler – running helmet detection");
         const helmetResult = await detectHelmet(imagePath);
         if (helmetResult === "no_helmet") {
-          // Fetch helmet fine dynamically
           const helmetFinePrompt = `What is the current fine for "No Helmet" violation for two-wheeler riders in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
           const helmetFineText = await callGeminiAI(helmetFinePrompt);
           const helmetFineData = safeJSONParse(helmetFineText, { fine: 500, law: "Section 129 MV Act", reference: "Standard fine" });
@@ -1025,17 +1048,42 @@ app.post("/analyze", async (req, res) => {
             severity: "High"
           });
           console.log(`💰 Helmet violation added: ₹${helmetFineData.fine}`);
+          helmetViolationAdded = true;
         } else if (helmetResult === "with_helmet") {
           console.log("✅ Helmet detected – no violation");
         } else {
           console.log("⚠️ Helmet detection unclear – skipping");
+        }
+
+        // Triple riding detection
+        console.log("🛵 Two‑wheeler – running triple riding detection");
+        const tripleResult = await detectTripleRiding(imagePath);
+        if (tripleResult.triple_count > 0) {
+          const tripleFinePrompt = `What is the current fine for "Triple Riding" violation for two-wheelers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
+          const tripleFineText = await callGeminiAI(tripleFinePrompt);
+          const tripleFineData = safeJSONParse(tripleFineText, { fine: 1500, law: "Section 128 MV Act", reference: "Standard fine" });
+          const fineAmount = tripleFineData.fine !== undefined ? tripleFineData.fine : 1500;
+          const law = tripleFineData.law || "Section 128 MV Act";
+          const reference = tripleFineData.reference || "Kerala MV Rules";
+          violations.push({
+            category: "Traffic Violation",
+            title: "Triple Riding",
+            description: `Detected ${tripleResult.triple_count} instance(s) of triple riding`,
+            law: law,
+            fineAmount: fineAmount,
+            fineReference: reference,
+            severity: "Medium"
+          });
+          console.log(`💰 Triple riding violation added: ₹${fineAmount}`);
+          tripleViolationAdded = true;
+        } else {
+          console.log("✅ No triple riding detected");
         }
       } 
       else if (isFourWheeler) {
         console.log("🚗 Four‑wheeler – running seatbelt detection");
         const seatbeltResult = await detectSeatbelt(imagePath);
         if (seatbeltResult.seatbelt_worn === false) {
-          // Fetch seatbelt fine dynamically
           console.log("🤖 Getting current seatbelt fine from Gemini...");
           const seatbeltFinePrompt = `What is the current fine for "No Seatbelt" violation for four-wheeler drivers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
           const seatbeltFineText = await callGeminiAI(seatbeltFinePrompt);
@@ -1061,19 +1109,24 @@ app.post("/analyze", async (req, res) => {
         console.log("⚠️ Unknown vehicle type – skipping YOLO detections");
       }
 
-      // Filter Gemini violations: remove helmet always, remove seatbelt only if YOLO added one
+      // STEP: Get other violations from Gemini (environmental, etc.)
+      console.log("🤖 Getting other violations from Gemini...");
+      const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
+      const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
+
+      // Filter Gemini violations: remove helmet, seatbelt, triple riding if already handled
       if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
         geminiResult.violations = geminiResult.violations.filter(v => {
           const title = v.title.toLowerCase();
-          // Helmet: always remove
           const isHelmet = title.includes('helmet') && (title.includes('no') || title.includes('without'));
-          if (isHelmet) return false;
-          // Seatbelt: remove only if YOLO added a violation
+          if (isHelmet && helmetViolationAdded) return false;
           const isSeatbelt = title.includes('seatbelt') && (
             title.includes('no') || title.includes('not') || title.includes('without') ||
             title.includes('failure') || title.includes('missing') || title.includes('unbuckled')
           );
           if (isSeatbelt && seatbeltViolationAdded) return false;
+          const isTriple = title.includes('triple') || title.includes('extra passenger') || title.includes('more than 2');
+          if (isTriple && tripleViolationAdded) return false;
           return true;
         });
       }
