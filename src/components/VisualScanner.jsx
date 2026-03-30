@@ -289,7 +289,8 @@ export default function VisualScanner({ userEmail }) {
             image: imgSrc, 
             dateOfOffense: dateString, 
             timeOfOffense: timeString,
-            authorityName: realAuthorityName 
+            authorityName: realAuthorityName,
+            cropped_plate: result.cropped_plate
         };
 
         const res = await axios.post("http://localhost:5000/submit-report", reportPayload);

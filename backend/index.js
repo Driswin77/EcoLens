@@ -11,6 +11,7 @@ import bcrypt from "bcryptjs";
 import cron from "node-cron"; 
 import { exec } from "child_process";
 import { promisify } from "util";
+import sharp from 'sharp';
 
 import { fileURLToPath } from 'url';
 // --- At the top of index.js (after other imports) ---
@@ -84,9 +85,9 @@ const sendWelcomeEmail = async (email, name) => {
   }
 };
 
-// --- HELPER: OFFICIAL ALERT EMAIL (UPDATED WITH NUMBER PLATES) ---
-const sendOfficialAlert = async (report, authorityName) => {
-  // Format number plates for email
+// --- HELPER: OFFICIAL ALERT EMAIL (UPDATED WITH CROPPED PLATE) ---
+const sendOfficialAlert = async (report, authorityName, croppedPlateBase64 = null) => {
+  // Format number plates for email (text)
   const platesHtml = report.number_plates && report.number_plates.length > 0 
     ? `<div style="background-color: #e3f2fd; padding: 15px; margin: 15px 0; border-left: 4px solid #2196f3; border-radius: 4px;">
         <h3 style="margin: 0 0 10px 0; color: #1976d2; font-size: 16px;">📋 VEHICLE NUMBER PLATES DETECTED</h3>
@@ -97,11 +98,27 @@ const sendOfficialAlert = async (report, authorityName) => {
           </p>
         `).join('')}
       </div>`
-    : '<p style="color: #666; font-style: italic;">No number plates detected in the evidence image.</p>';
+    : '<p style="color: #666; font-style: italic;">.</p>';
+
+  // Prepare attachments
+  const attachments = [
+    {
+      filename: 'evidence_photo.jpg',
+      content: report.image.split("base64,")[1], 
+      encoding: 'base64'
+    }
+  ];
+  if (croppedPlateBase64) {
+    attachments.push({
+      filename: 'number_plate.png',
+      content: croppedPlateBase64,
+      encoding: 'base64'
+    });
+  }
 
   const mailOptions = {
     from: '"EcoLens Enforcer" <no-reply@ecopenalty.gov>',
-    to: 'recipient_email@gmail.com',
+    to: 'recipient_email@gmail.com',  // Replace with actual authority email
     subject: `⚡ OFFICIAL ALERT: ${report.category} Detected - ${authorityName}`,
     html: `
       <div style="font-family: Arial, sans-serif; border: 1px solid #333; padding: 20px; max-width: 600px; margin: 0 auto;">
@@ -110,19 +127,19 @@ const sendOfficialAlert = async (report, authorityName) => {
         </h2>
         
         <table style="width: 100%; margin: 15px 0; border-collapse: collapse;">
-           <tr>
-            <td style="padding: 8px; background: #f5f5f5;"><strong>To:</strong></td>
-            <td style="padding: 8px;">${authorityName}</td>
-           </tr>
-           <tr>
-            <td style="padding: 8px; background: #f5f5f5;"><strong>Reporter:</strong></td>
-            <td style="padding: 8px;">${report.userEmail}</td>
-           </tr>
-           <tr>
-            <td style="padding: 8px; background: #f5f5f5;"><strong>Date/Time:</strong></td>
-            <td style="padding: 8px;">${report.offenseDate || new Date().toLocaleDateString()} at ${report.offenseTime || new Date().toLocaleTimeString()}</td>
-           </tr>
-         </table>
+            <tr>
+              <td style="padding: 8px; background: #f5f5f5;"><strong>To:</strong></td>
+              <td style="padding: 8px;">${authorityName}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; background: #f5f5f5;"><strong>Reporter:</strong></td>
+              <td style="padding: 8px;">${report.userEmail}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; background: #f5f5f5;"><strong>Date/Time:</strong></td>
+              <td style="padding: 8px;">${report.offenseDate || new Date().toLocaleDateString()} at ${report.offenseTime || new Date().toLocaleTimeString()}</td>
+            </tr>
+        </table>
         
         ${platesHtml}
         
@@ -143,18 +160,12 @@ const sendOfficialAlert = async (report, authorityName) => {
 
         <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; text-align: center;">
           <p>⚡ This is an automated dispatch from the EcoLens Enforcement System.</p>
-          <p>📸 Evidence photo is attached below. Please take necessary action as per law.</p>
+          <p>📸 Evidence photos are attached below. Please take necessary action as per law.</p>
           <p style="margin-top: 15px;">🔔 This is a system generated report. Do not reply to this email.</p>
         </div>
       </div>
     `,
-    attachments: [
-      {
-        filename: 'evidence_photo.jpg',
-        content: report.image.split("base64,")[1], 
-        encoding: 'base64'
-      }
-    ]
+    attachments: attachments
   };
 
   try {
@@ -211,10 +222,10 @@ const IssueSchema = new mongoose.Schema({
   location: String,
   image: String,
   number_plates: [{
-    plate_number: String,
-    detection_confidence: Number,
-    ocr_confidence: Number
-  }],
+  detection_confidence: Number,
+  bbox: [Number]
+}],
+  cropped_plate: { type: String, default: null }, // NEW: base64 of cropped number plate
   status: { type: String, default: "Forwarded" }, 
   forwardedTo: String, 
   offenseDate: String, 
@@ -340,58 +351,73 @@ async function callGeminiAI(prompt, base64Image = null, mimeType = "image/jpeg")
     throw new Error("All AI models failed or are busy. Please try again later.");
 }
 
-// Traffic Classification Prompt
-const TRAFFIC_CLASSIFICATION_PROMPT = `You are an AI traffic image classifier. Analyze this image carefully.
-
-TASK: Determine if this image is TRAFFIC-RELATED or NOT.
-
-Traffic-related images include:
-- Vehicles on roads (cars, bikes, trucks, buses)
-- Traffic violations (triple riding, wrong side, etc.)
-- Traffic signals, signs, or road infrastructure
-- Accidents or traffic jams
-- Parking violations
-
-Non-traffic images include:
-- Garbage dumps, waste, litter (unless directly blocking traffic)
-- Environmental issues (burning waste, pollution) - these are separate
-- Buildings, landscapes, nature
-- People not on roads
-- Animals (unless causing traffic obstruction)
-
-CRITICAL: Return ONLY valid JSON in this exact format:
-{
-  "isTraffic": true/false,
-  "confidence": "High/Medium/Low",
-  "reason": "Brief explanation of classification"
-}`;
-const VIOLATION_DETECTION_PROMPT = `You are an AI enforcement officer for India with REAL-TIME access to current laws and fines. Analyze this image and identify ALL violations present.
+// Traffic‑specific violation prompt
+const TRAFFIC_VIOLATION_PROMPT = `You are an AI enforcement officer for India with REAL-TIME access to current laws and fines. Analyze this traffic image and identify ONLY traffic violations present. Ignore any environmental issues (waste, pollution, etc.) – they are handled separately.
 
 CRITICAL INSTRUCTIONS:
 1. DO NOT report helmet violations – they are handled separately.
 2. DO NOT report seatbelt violations – they are handled separately.
 3. DO NOT report triple riding violations – they are handled separately.
-4. For EVERY violation detected, determine the CURRENT fine amount based on LATEST laws.
+4. For EVERY traffic violation detected, determine the CURRENT fine amount based on LATEST laws.
 5. Consider recent amendments and notifications (including December 2023 updates).
 6. Fines should be specific to Kerala state regulations.
 7. Include the legal source for each fine.
 
 FINE REFERENCE GUIDE:
-- Waste dumping spot fines: ₹5,000 (Kerala Municipality Amendment Dec 2023)
-- Plastic ban violations: ₹25,000 first offense (Kerala Plastic Ban Rules)
-- Industrial waste: ₹50,000 - ₹5,00,000 (Water/Environment Protection Act)
 - Traffic violations: Refer to Motor Vehicles (Kerala Amendment) Act, 2023
-- Burning waste: ₹10,000 (NGT guidelines)
-- HSRP violation: ₹5,000-10,000 (Central Motor Vehicles Rules)
+- Using mobile phone while driving: ₹1,000–5,000 (Section 184 MV Act)
+- Driving without license: ₹5,000 (Section 181 MV Act)
+- Overloading: ₹2,000–20,000 (Section 194 MV Act)
+- No pollution certificate: ₹1,000 (Section 190(2) MV Act)
+- Expired insurance: ₹2,000 (Section 196 MV Act)
+- Illegal parking: ₹500–1,000 (Section 122/177 MV Act)
+- Wrong‑side driving: ₹2,000–4,000 (Section 184 MV Act)
+- Jumping red light: ₹1,000–5,000 (Section 119/177 MV Act)
+- Using pressure horn: ₹1,000 (Section 190(2) MV Act)
 
 Return STRICT JSON in this format:
 {
   "violationsFound": true/false,
   "violations": [
     {
-      "category": "Traffic Violation" or "Environmental Violation" or "Civic Issue",
+      "category": "Traffic Violation",
       "title": "Specific Violation Name",
-      "description": "Brief description of what you observed",
+      "description": "Brief description",
+      "law": "Specific Act and Section",
+      "fineAmount": number,
+      "fineReference": "Source of fine with date",
+      "severity": "High/Medium/Low"
+    }
+  ]
+}
+
+If no violations found, return: { "violationsFound": false, "violations": [] }`;
+
+// Environmental‑specific violation prompt
+const ENVIRONMENTAL_VIOLATION_PROMPT = `You are an AI enforcement officer for India with REAL-TIME access to current laws and fines. Analyze this environmental image and identify ONLY environmental violations present. Ignore any traffic‑related issues (vehicles, driving, etc.) – they are handled separately.
+
+CRITICAL INSTRUCTIONS:
+1. For EVERY environmental violation detected, determine the CURRENT fine amount based on LATEST laws.
+2. Consider recent amendments and notifications (including December 2023 updates).
+3. Fines should be specific to Kerala state regulations.
+4. Include the legal source for each fine.
+
+FINE REFERENCE GUIDE:
+- Waste dumping spot fines: ₹5,000 (Kerala Municipality Amendment Dec 2023)
+- Plastic ban violations: ₹25,000 first offense (Kerala Plastic Ban Rules)
+- Industrial waste: ₹50,000 - ₹5,00,000 (Water/Environment Protection Act)
+- Burning waste: ₹10,000 (NGT guidelines)
+- Littering: ₹500–1,000 (Municipal bylaws)
+- Water pollution: ₹25,000–50,000 (Water Act)
+
+Return STRICT JSON in this format:
+{
+  "violationsFound": true/false,
+  "violations": [
+    {
+      "category": "Environmental Violation",
+      "title": "Specific Violation Name",
+      "description": "Brief description",
       "law": "Specific Act and Section",
       "fineAmount": number,
       "fineReference": "Source of fine with date",
@@ -581,7 +607,7 @@ async function detectHelmet(imagePath) {
   try {
     console.log(" Running YOLO for helmet detection...");
     
-    const { stdout, stderr } = await execAsync(`python detect.py "${imagePath}"`);
+    const { stdout, stderr } = await execAsync(`python detect_helmet.py "${imagePath}"`);
     
     if (stderr) {
       console.warn("YOLO Stderr:", stderr);
@@ -646,30 +672,17 @@ async function detectNumberPlate(imagePath) {
   }
 }
 
-// =========================================================
-// 8. VEHICLE TYPE DETECTION (NEW)
-// =========================================================
 async function detectVehicleType(imagePath) {
   try {
-    console.log(" Running vehicle type detection...");
-    
+    console.log("🚗 Running vehicle type detection...");
     const { stdout, stderr } = await execAsync(`python detect_vehicle.py "${imagePath}"`);
-    
-    if (stderr) {
-      console.warn("Vehicle Detection Stderr:", stderr);
-    }
-    
-    try {
-      const result = JSON.parse(stdout.trim());
-      console.log("🚙 Vehicle type result:", result);
-      return result;
-    } catch (parseError) {
-      console.error("Failed to parse vehicle detection output:", parseError);
-      return { vehicleType: 'unknown', confidence: 0 };
-    }
+    if (stderr) console.warn("Vehicle Detection Stderr:", stderr);
+    const result = JSON.parse(stdout.trim());
+    // The Python script now returns { detections: [...] }
+    return result.detections || [];
   } catch (error) {
     console.error("Vehicle Detection Error:", error);
-    return { vehicleType: 'unknown', confidence: 0 };
+    return [];
   }
 }
 
@@ -691,7 +704,7 @@ async function detectTripleRiding(imagePath) {
 
 async function detectImageType(imagePath) {
   try {
-    const { stdout, stderr } = await execAsync(`python detect_vtype.py "${imagePath}"`);
+    const { stdout, stderr } = await execAsync(`python detect_vio.py "${imagePath}"`);
     if (stderr) console.warn("Image type detection stderr:", stderr);
     const result = JSON.parse(stdout.trim());
     return result; // { class, confidence }
@@ -811,13 +824,14 @@ app.delete("/delete-doc/:id", async (req, res) => {
   }
 });
 
-// --- SUBMIT REPORT ROUTE (UPDATED WITH NUMBER PLATES) ---
+// --- SUBMIT REPORT ROUTE (UPDATED WITH CROPPED PLATE) ---
 app.post("/submit-report", async (req, res) => {
     try {
         const { 
             title, category, severity, description, location, image, 
             userEmail, dateOfOffense, timeOfOffense, authorityName,
-            number_plates 
+            number_plates,
+            cropped_plate   // NEW: accept cropped plate base64
         } = req.body;
         
         if (!userEmail) return res.status(401).json({ error: "Unauthorized: No User ID" });
@@ -834,6 +848,7 @@ app.post("/submit-report", async (req, res) => {
                 location, 
                 image,
                 number_plates: number_plates || [],
+                cropped_plate: cropped_plate || null,   // NEW: store cropped plate
                 status: "Forwarded",
                 forwardedTo: officialAuthority,
                 offenseDate: dateOfOffense || new Date().toLocaleDateString('en-IN'),
@@ -841,7 +856,8 @@ app.post("/submit-report", async (req, res) => {
             });
             await issue.save();
 
-            sendOfficialAlert(issue, officialAuthority);
+            // Pass the cropped plate to the email function
+            sendOfficialAlert(issue, officialAuthority, issue.cropped_plate);
 
             console.log(`📨 OFFICIAL DISPATCH: Report #${issue._id}`);
             console.log(`   ► ROUTED TO: ${officialAuthority}`);
@@ -961,7 +977,7 @@ app.get("/api/legal/history/:userId", async (req, res) => {
 });
 
 // =========================================================
-// 10. MAIN ANALYZE ENDPOINT (Local vehicle type + all YOLO detectors)
+// 10. MAIN ANALYZE ENDPOINT (Primary vehicle selection + YOLO detectors)
 // =========================================================
 app.post("/analyze", async (req, res) => {
   try {
@@ -990,128 +1006,177 @@ app.post("/analyze", async (req, res) => {
       return res.status(500).json({ error: "Failed to write image" });
     }
 
-    // STEP 1: Classify if traffic-related using Gemini
-    console.log("🔍 Classifying image type...");
-    const classificationText = await callGeminiAI(TRAFFIC_CLASSIFICATION_PROMPT, cleanBase64);
-    const classification = safeJSONParse(classificationText, { 
-      isTraffic: false, 
-      confidence: "Low", 
-      reason: "Parse failed" 
-    });
-    console.log("📊 Classification:", classification);
+    // STEP 1: Classify if traffic-related using local YOLO classification model
+    console.log("🔍 Classifying image type (local)...");
+    const typeResult = await detectImageType(imagePath);
+    const isTraffic = typeResult.class === 'traffic';
+    const classificationConfidence = typeResult.confidence;
+    console.log(`📊 Local classification: ${typeResult.class} (conf: ${classificationConfidence})`);
 
     let violations = [];
     let plateResult = { plates_found: 0, plates: [] };
     let vehicleType = "unknown";
+    let croppedPlateBase64 = null;
 
     // STEP 2: If traffic, run detection pipelines
-    if (classification.isTraffic === true) {
+    if (isTraffic) {
       console.log("🚦 Traffic image detected – running local vehicle type detection...");
 
-      // Get vehicle type from local YOLO model
-      const vehicle = await detectVehicleType(imagePath);
-      vehicleType = vehicle.vehicle_type;
-      console.log("🚗 Vehicle type (local):", vehicleType);
+      // --- Get ALL detected vehicles from local YOLO model ---
+      const vehicles = await detectVehicleType(imagePath);
+      console.log("🚗 Detected vehicles:", vehicles);
 
-      // Run number plate detection (only for traffic)
+      // --- Determine primary vehicle (largest, closest to centre) ---
+      let primaryVehicle = null;
+      if (vehicles.length > 0) {
+        // Get image dimensions for scoring
+        const metadata = await sharp(imagePath).metadata();
+        const imgWidth = metadata.width;
+        const imgHeight = metadata.height;
+        const imgCenter = { x: imgWidth / 2, y: imgHeight / 2 };
+        const imgDiagonal = Math.hypot(imgWidth, imgHeight);
+
+        // Compute a "primary" score for each detection
+        const scored = vehicles.map(v => {
+          const [x1, y1, x2, y2] = v.bbox;
+          const area = (x2 - x1) * (y2 - y1);
+          const centerX = (x1 + x2) / 2;
+          const centerY = (y1 + y2) / 2;
+          const dist = Math.hypot(centerX - imgCenter.x, centerY - imgCenter.y);
+          const normDist = dist / imgDiagonal;
+          const normArea = area / (imgWidth * imgHeight);
+          const score = normArea * (1 - normDist);
+          return { ...v, score };
+        });
+
+        scored.sort((a, b) => b.score - a.score);
+        primaryVehicle = scored[0];
+        vehicleType = primaryVehicle.vehicle_type;
+        console.log(`🚗 Primary vehicle: ${vehicleType} (confidence: ${primaryVehicle.confidence}, score: ${primaryVehicle.score.toFixed(3)})`);
+      } else {
+        vehicleType = 'unknown';
+      }
+
+      // --- Run number plate detection (only for traffic) ---
       console.log("🔍 Running number plate detection...");
       try {
         plateResult = await detectNumberPlate(imagePath);
+
+        // If a plate was detected, crop the region and save as base64
+        if (plateResult.plates_found > 0 && plateResult.plates[0].bbox) {
+          const [x1, y1, x2, y2] = plateResult.plates[0].bbox;
+          const left = Math.max(0, x1);
+          const top = Math.max(0, y1);
+          const width = Math.max(1, x2 - left);
+          const height = Math.max(1, y2 - top);
+
+          const croppedBuffer = await sharp(imagePath)
+            .extract({ left, top, width, height })
+            .png()
+            .toBuffer();
+          croppedPlateBase64 = croppedBuffer.toString('base64');
+          console.log(`📸 Cropped plate saved (${width}x${height})`);
+        }
       } catch (plateError) {
         console.error("Number plate detection failed:", plateError);
         plateResult = { plates_found: 0, plates: [] };
       }
 
-      // Determine vehicle category
-      const isTwoWheeler = ['motorcycle', 'scooter', 'bike', 'two-wheeler', 'two_wheeler', 'motor cycle'].some(t => vehicleType.toLowerCase().includes(t));
-      const isFourWheeler = ['car', 'truck', 'bus', 'van', 'suv', 'sedan', 'hatchback', 'auto'].some(t => vehicleType.toLowerCase().includes(t));
-
       let helmetViolationAdded = false;
       let seatbeltViolationAdded = false;
       let tripleViolationAdded = false;
 
-      // Run appropriate YOLO detectors based on vehicle type
-      if (isTwoWheeler) {
-        console.log("🛵 Two‑wheeler – running helmet detection");
-        const helmetResult = await detectHelmet(imagePath);
-        if (helmetResult === "no_helmet") {
-          const helmetFinePrompt = `What is the current fine for "No Helmet" violation for two-wheeler riders in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
-          const helmetFineText = await callGeminiAI(helmetFinePrompt);
-          const helmetFineData = safeJSONParse(helmetFineText, { fine: 500, law: "Section 129 MV Act", reference: "Standard fine" });
-          violations.push({
-            category: "Traffic Violation",
-            title: "No Helmet",
-            description: "Rider is not wearing a helmet",
-            law: helmetFineData.law,
-            fineAmount: helmetFineData.fine,
-            fineReference: helmetFineData.reference,
-            severity: "High"
-          });
-          console.log(`💰 Helmet violation added: ₹${helmetFineData.fine}`);
-          helmetViolationAdded = true;
-        } else if (helmetResult === "with_helmet") {
-          console.log("✅ Helmet detected – no violation");
-        } else {
-          console.log("⚠️ Helmet detection unclear – skipping");
-        }
+      // --- Run detection based on PRIMARY vehicle ---
+      if (primaryVehicle) {
+        const isTwoWheeler = ['motorcycle', 'scooter', 'bike', 'two-wheeler'].includes(primaryVehicle.vehicle_type);
+        const isFourWheeler = ['car', 'truck', 'bus', 'van', 'suv', 'auto'].includes(primaryVehicle.vehicle_type);
 
-        // Triple riding detection
-        console.log("🛵 Two‑wheeler – running triple riding detection");
-        const tripleResult = await detectTripleRiding(imagePath);
-        if (tripleResult.triple_count > 0) {
-          const tripleFinePrompt = `What is the current fine for "Triple Riding" violation for two-wheelers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
-          const tripleFineText = await callGeminiAI(tripleFinePrompt);
-          const tripleFineData = safeJSONParse(tripleFineText, { fine: 1500, law: "Section 128 MV Act", reference: "Standard fine" });
-          const fineAmount = tripleFineData.fine !== undefined ? tripleFineData.fine : 1500;
-          const law = tripleFineData.law || "Section 128 MV Act";
-          const reference = tripleFineData.reference || "Kerala MV Rules";
-          violations.push({
-            category: "Traffic Violation",
-            title: "Triple Riding",
-            description: `Detected ${tripleResult.triple_count} instance(s) of triple riding`,
-            law: law,
-            fineAmount: fineAmount,
-            fineReference: reference,
-            severity: "Medium"
-          });
-          console.log(`💰 Triple riding violation added: ₹${fineAmount}`);
-          tripleViolationAdded = true;
+        if (isTwoWheeler) {
+          console.log("🛵 Primary vehicle is two‑wheeler – running helmet and triple riding detection");
+
+          // Helmet detection
+          const helmetResult = await detectHelmet(imagePath);
+          if (helmetResult === "no_helmet") {
+            const helmetFinePrompt = `What is the current fine for "No Helmet" violation for two-wheeler riders in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
+            const helmetFineText = await callGeminiAI(helmetFinePrompt);
+            const helmetFineData = safeJSONParse(helmetFineText, { fine: 500, law: "Section 129 MV Act", reference: "Standard fine" });
+            const fineAmount = helmetFineData.fine !== undefined ? helmetFineData.fine : 500;
+            const law = helmetFineData.law || "Section 129 MV Act";
+            const reference = helmetFineData.reference || "Kerala MV Rules";
+            violations.push({
+              category: "Traffic Violation",
+              title: "No Helmet",
+              description: "Rider is not wearing a helmet",
+              law: law,
+              fineAmount: fineAmount,
+              fineReference: reference,
+              severity: "High"
+            });
+            console.log(`💰 Helmet violation added: ₹${fineAmount}`);
+            helmetViolationAdded = true;
+          } else if (helmetResult === "with_helmet") {
+            console.log("✅ Helmet detected – no violation");
+          } else {
+            console.log("⚠️ Helmet detection unclear – skipping");
+          }
+
+          // Triple riding detection
+          const tripleResult = await detectTripleRiding(imagePath);
+          if (tripleResult.triple_count > 0) {
+            const tripleFinePrompt = `What is the current fine for "Triple Riding" violation for two-wheelers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
+            const tripleFineText = await callGeminiAI(tripleFinePrompt);
+            const tripleFineData = safeJSONParse(tripleFineText, { fine: 1500, law: "Section 128 MV Act", reference: "Standard fine" });
+            const fineAmount = tripleFineData.fine !== undefined ? tripleFineData.fine : 1500;
+            const law = tripleFineData.law || "Section 128 MV Act";
+            const reference = tripleFineData.reference || "Kerala MV Rules";
+            violations.push({
+              category: "Traffic Violation",
+              title: "Triple Riding",
+              description: `Detected ${tripleResult.triple_count} instance(s) of triple riding`,
+              law: law,
+              fineAmount: fineAmount,
+              fineReference: reference,
+              severity: "Medium"
+            });
+            console.log(`💰 Triple riding violation added: ₹${fineAmount}`);
+            tripleViolationAdded = true;
+          } else {
+            console.log("✅ No triple riding detected");
+          }
+
+        } else if (isFourWheeler) {
+          console.log("🚗 Primary vehicle is four‑wheeler – running seatbelt detection");
+          const seatbeltResult = await detectSeatbelt(imagePath);
+          if (seatbeltResult.seatbelt_worn === false) {
+            const seatbeltFinePrompt = `What is the current fine for "No Seatbelt" violation for four-wheeler drivers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
+            const seatbeltFineText = await callGeminiAI(seatbeltFinePrompt);
+            const seatbeltFineData = safeJSONParse(seatbeltFineText, { fine: 1000, law: "Section 138(3) MV Act", reference: "Standard fine" });
+            violations.push({
+              category: "Traffic Violation",
+              title: "No Seatbelt",
+              description: "Driver not wearing seatbelt",
+              law: seatbeltFineData.law,
+              fineAmount: seatbeltFineData.fine,
+              fineReference: seatbeltFineData.reference,
+              severity: "Medium"
+            });
+            console.log(`💰 Seatbelt violation added: ₹${seatbeltFineData.fine}`);
+            seatbeltViolationAdded = true;
+          } else if (seatbeltResult.seatbelt_worn === true) {
+            console.log("✅ Seatbelt detected – no violation");
+          } else {
+            console.log("⚠️ Seatbelt detection unclear – skipping");
+          }
         } else {
-          console.log("✅ No triple riding detected");
+          console.log("⚠️ Unknown vehicle type – skipping YOLO detections");
         }
-      } 
-      else if (isFourWheeler) {
-        console.log("🚗 Four‑wheeler – running seatbelt detection");
-        const seatbeltResult = await detectSeatbelt(imagePath);
-        if (seatbeltResult.seatbelt_worn === false) {
-          console.log("🤖 Getting current seatbelt fine from Gemini...");
-          const seatbeltFinePrompt = `What is the current fine for "No Seatbelt" violation for four-wheeler drivers in Kerala as per the latest Motor Vehicles Act amendments? Return ONLY a JSON with fine amount and legal reference.`;
-          const seatbeltFineText = await callGeminiAI(seatbeltFinePrompt);
-          const seatbeltFineData = safeJSONParse(seatbeltFineText, { fine: 1000, law: "Section 138(3) MV Act", reference: "Standard fine" });
-          violations.push({
-            category: "Traffic Violation",
-            title: "No Seatbelt",
-            description: "Driver not wearing seatbelt",
-            law: seatbeltFineData.law,
-            fineAmount: seatbeltFineData.fine,
-            fineReference: seatbeltFineData.reference,
-            severity: "Medium"
-          });
-          console.log(`💰 Seatbelt violation added: ₹${seatbeltFineData.fine}`);
-          seatbeltViolationAdded = true;
-        } else if (seatbeltResult.seatbelt_worn === true) {
-          console.log("✅ Seatbelt detected – no violation");
-        } else {
-          console.log("⚠️ Seatbelt detection unclear – skipping");
-        }
-      }
-      else {
-        console.log("⚠️ Unknown vehicle type – skipping YOLO detections");
+      } else {
+        console.log("⚠️ No vehicle detected – skipping YOLO detections");
       }
 
-      // STEP: Get other violations from Gemini (environmental, etc.)
-      console.log("🤖 Getting other violations from Gemini...");
-      const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
+      // --- STEP: Get Gemini violations using traffic‑specific prompt ---
+      console.log("🤖 Getting traffic violations from Gemini...");
+      const geminiText = await callGeminiAI(TRAFFIC_VIOLATION_PROMPT, cleanBase64);
       const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
 
       // Filter Gemini violations: remove helmet, seatbelt, triple riding if already handled
@@ -1158,12 +1223,12 @@ app.post("/analyze", async (req, res) => {
       });
 
     } else {
-      // Non‑traffic image: only Gemini violations (no YOLO)
-      console.log("🌍 Non-traffic image – running Gemini for violations...");
-      const geminiText = await callGeminiAI(VIOLATION_DETECTION_PROMPT, cleanBase64);
+      // Non‑traffic image: only Gemini violations (environmental)
+      console.log("🌍 Non-traffic image – running Gemini for environmental violations...");
+      const geminiText = await callGeminiAI(ENVIRONMENTAL_VIOLATION_PROMPT, cleanBase64);
       const geminiResult = safeJSONParse(geminiText, { violationsFound: false, vehicleType: "unknown", violations: [] });
 
-      // Filter out unwanted keywords
+      // Filter out unwanted keywords (still useful)
       const excludedKeywords = ['footwear', 'hsrp', 'registration plate', 'non-compliance'];
       if (geminiResult.violations && Array.isArray(geminiResult.violations)) {
         geminiResult.violations = geminiResult.violations.filter(v => {
@@ -1192,7 +1257,7 @@ app.post("/analyze", async (req, res) => {
       console.log("🗑️ Temp file deleted");
     } catch (e) { /* ignore */ }
 
-    // Send response
+    // Send response (includes cropped plate)
     res.json({
       violationsFound: violations.length > 0,
       violations: violations.map(v => ({
@@ -1205,13 +1270,18 @@ app.post("/analyze", async (req, res) => {
         severity: v.severity
       })),
       vehicleType: vehicleType,
-      number_plates: plateResult.plates || [],
+      number_plates: (plateResult.plates || []).map(p => ({
+        detection_confidence: p.detection_confidence,
+        bbox: p.bbox
+      })),
       plates_found: plateResult.plates_found || 0,
       totalEstimatedFine: `₹${totalFine}`,
       classification: {
-        isTraffic: classification.isTraffic,
-        confidence: classification.confidence
+        isTraffic: isTraffic,
+        confidence: classificationConfidence,
+        reason: "Local YOLO classification"
       },
+      cropped_plate: croppedPlateBase64,
       fineDisclaimer: "Fines are based on current Kerala regulations as known to Gemini AI."
     });
 
